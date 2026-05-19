@@ -15,10 +15,10 @@ from pathlib import Path
 
 import pytest
 
-from llmcars.collectors import _normalize_cline_model
-from llmcars.ledger import recalc_ledger_costs
-from llmcars.ops_data import model_color, short_model
-from llmcars.pricing import (
+from lcost.collectors import _normalize_cline_model
+from lcost.ledger import recalc_ledger_costs
+from lcost.ops_data import model_color, short_model
+from lcost.pricing import (
     GPT5_PRICING,
     calculate_cost,
     family_for_model,
@@ -146,7 +146,7 @@ class TestShortModel:
 class TestModelColor:
     def test_gpt5_color_from_registry(self):
         # Whatever the registry color is, it must be derived (not #CC9966 fallback)
-        from llmcars.pricing import FAMILIES_BY_KEY
+        from lcost.pricing import FAMILIES_BY_KEY
         expected = FAMILIES_BY_KEY["gpt-5"].color
         assert model_color(short_model("gpt-5")) == expected
 

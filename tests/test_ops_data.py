@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from llmcars.ops_data import (
+from lcost.ops_data import (
     TOOL_ABBREV,
     aggregate_today,
     collect_entries,
@@ -451,7 +451,7 @@ class TestDeriveRecentView:
 
     def test_band_totals(self):
         from datetime import datetime
-        from llmcars.ops_data import derive_recent_view, short_model, short_project
+        from lcost.ops_data import derive_recent_view, short_model, short_project
         now = datetime(2026, 5, 13, 21, 30)
         rv = derive_recent_view(self._entries(now), short_project, short_model, now=now)
         # 1h band: only the 10-min-old entry
@@ -467,7 +467,7 @@ class TestDeriveRecentView:
 
     def test_series_shape(self):
         from datetime import datetime
-        from llmcars.ops_data import (
+        from lcost.ops_data import (
             derive_recent_view, short_model, short_project, _RECENT_BUCKETS,
         )
         now = datetime(2026, 5, 13, 21, 30)
@@ -483,7 +483,7 @@ class TestDeriveRecentView:
 
     def test_model_breakdown(self):
         from datetime import datetime
-        from llmcars.ops_data import derive_recent_view, short_model, short_project
+        from lcost.ops_data import derive_recent_view, short_model, short_project
         now = datetime(2026, 5, 13, 21, 30)
         rv = derive_recent_view(self._entries(now), short_project, short_model, now=now)
         # Two opus-4.7 calls in window: $1.00 + $0.25
@@ -493,7 +493,7 @@ class TestDeriveRecentView:
 
     def test_empty_entries(self):
         from datetime import datetime
-        from llmcars.ops_data import derive_recent_view, short_model, short_project
+        from lcost.ops_data import derive_recent_view, short_model, short_project
         now = datetime(2026, 5, 13, 21, 30)
         rv = derive_recent_view([], short_project, short_model, now=now)
         assert rv.cost_12h == 0

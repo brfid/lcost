@@ -1,6 +1,6 @@
-# llmcars stability contract
+# lcost stability contract
 
-llmcars has no external embedders today. This file is forward-looking: if a future tool wants to **vendor** small pieces of llmcars rather than import it (the supported pattern — `import llmcars` is not), this file pins the API shapes that vendor would copy, so internal refactors don't break it silently.
+lcost has no external embedders today. This file is forward-looking: if a future tool wants to **vendor** small pieces of lcost rather than import it (the supported pattern — `import lcost` is not), this file pins the API shapes that vendor would copy, so internal refactors don't break it silently.
 
 If you change anything listed here, bump the **STABLE_VERSION** below. Future embedders pin to a commit hash and the version number, and re-pin on drift.
 
@@ -13,18 +13,18 @@ STABLE_VERSION = 1
 Stable for embedders means:
 
 - Field names and types under the headings below won't change without a STABLE_VERSION bump.
-- Internal module layout, function signatures, return shapes of helpers, CLI flags, and dashboard output **are not stable**. Don't `import llmcars.<x>`; copy the small piece you need.
+- Internal module layout, function signatures, return shapes of helpers, CLI flags, and dashboard output **are not stable**. Don't `import lcost.<x>`; copy the small piece you need.
 
 Out of scope (deliberately not stable):
 
-- `llmcars/collectors.py` function names and call sites.
-- `llmcars/dashboard/` rendering and HTML.
-- `llmcars/cli.py` flags and positional args.
+- `lcost/collectors.py` function names and call sites.
+- `lcost/dashboard/` rendering and HTML.
+- `lcost/cli.py` flags and positional args.
 - `pyproject.toml` extras / optional deps.
 
 ## Stable: pricing dictionary shape
 
-Source: `llmcars/llmcars/pricing.py`.
+Source: `lcost/lcost/pricing.py`.
 
 Per-family pricing is a dict with these four keys, USD per **million** tokens:
 
@@ -52,7 +52,7 @@ Current numeric values are **not** stable across releases (vendors will copy the
 
 ## Stable: provider-prefix strip regex
 
-Source: `llmcars/llmcars/collectors.py`.
+Source: `lcost/lcost/collectors.py`.
 
 To resolve a Bedrock model id (e.g. `us.anthropic.claude-opus-4-7`) to a pricing family, strip a leading `<region>.<provider>.` prefix and substring-match the remainder for `opus` / `sonnet` / `haiku`:
 
@@ -64,7 +64,7 @@ The list of regions and providers is append-only; existing entries won't be remo
 
 ## Stable: Claude Code transcript JSONL shape (read path only)
 
-llmcars reads the transcripts Claude Code writes at `~/.claude/projects/**/*.jsonl` (incl. `*/subagents/*.jsonl`). Embedders that walk these files rely on:
+lcost reads the transcripts Claude Code writes at `~/.claude/projects/**/*.jsonl` (incl. `*/subagents/*.jsonl`). Embedders that walk these files rely on:
 
 ```jsonc
 {
@@ -84,7 +84,7 @@ llmcars reads the transcripts Claude Code writes at `~/.claude/projects/**/*.jso
 
 Records with `type != "assistant"` or no `message.usage` are skipped. Other top-level fields (`uuid`, `parentUuid`, `sessionId`, ...) are not stable for embedders — don't depend on them.
 
-This is upstream Claude Code's format, not llmcars' invention. If Anthropic changes it, we ship a new STABLE_VERSION and embedders re-pin.
+This is upstream Claude Code's format, not lcost' invention. If Anthropic changes it, we ship a new STABLE_VERSION and embedders re-pin.
 
 ## Stable: Claude Code statusLine stdin shape (read path only)
 
@@ -108,16 +108,16 @@ This is also upstream's format. Same versioning rule.
 A vendoring embedder must:
 
 1. Copy the constants/regex/formula it needs into its own source file.
-2. Put a header comment naming this file and the **commit hash** of llmcars at copy time.
+2. Put a header comment naming this file and the **commit hash** of lcost at copy time.
 3. Reference STABLE_VERSION in that comment.
-4. On any drift between vendored copy and current llmcars, update the copy and bump the pin in the same commit.
+4. On any drift between vendored copy and current lcost, update the copy and bump the pin in the same commit.
 
 Example header for a vendored copy:
 
 ```text
-# Vendored from llmcars/llmcars/pricing.py — DO NOT IMPORT llmcars DIRECTLY.
-# Source of truth: ~/src/llmcars (commit <full sha>)
-# Stability contract: ~/src/llmcars/STABILITY.md, STABLE_VERSION = 1.
+# Vendored from lcost/lcost/pricing.py — DO NOT IMPORT lcost DIRECTLY.
+# Source of truth: ~/src/lcost (commit <full sha>)
+# Stability contract: ~/src/lcost/STABILITY.md, STABLE_VERSION = 1.
 ```
 
 ## Known embedders

@@ -68,6 +68,28 @@ def hourly_cost_today(entries: List[Tuple]) -> List[float]:
     return hours
 
 
+def hourly_tokens_today(entries: List[Tuple]) -> List[float]:
+    """Return 24 floats: today's in+out tokens per hour at index 0..23."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    hours = [0.0] * 24
+    for dt, _, e in entries:
+        if dt.strftime("%Y-%m-%d") == today:
+            hours[dt.hour] += (
+                e.get(FIELD_TOKENS_IN, 0) + e.get(FIELD_TOKENS_OUT, 0)
+            )
+    return hours
+
+
+def hourly_requests_today(entries: List[Tuple]) -> List[float]:
+    """Return 24 floats: today's call count per hour at index 0..23."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    hours = [0.0] * 24
+    for dt, _, e in entries:
+        if dt.strftime("%Y-%m-%d") == today and e.get("source") != "agent_spawn":
+            hours[dt.hour] += 1
+    return hours
+
+
 def percentile(sorted_values: List[float], pct: float) -> float:
     """Return the value at percentile `pct` (∈ [0, 1])."""
     if not sorted_values:
@@ -360,7 +382,7 @@ def row_activity_text(entry: Dict) -> str:
     tools = entry.get("tools") or []
     if tools:
         chain = _escape_markup(_tool_chain(tools))
-        return f"[dim]⚒[/] [#CC9966]{chain}[/]"
+        return f"[dim]~[/] [#CC9966]{chain}[/]"
 
     bits = []
     stop = entry.get("stopReason")
@@ -487,7 +509,10 @@ class OpsView:
     median_cost: float
     p95_cost: float
     max_call_cost: float
+    median_tokens: int          # median tokens-per-call today
     hour_cost: List[float]      # 24 floats
+    hour_tokens: List[float]    # 24 floats — in+out tokens per hour
+    hour_requests: List[float]  # 24 floats — call count per hour
 
 
 def derive_ops_view(entries: List[Tuple], stats: Dict,
@@ -502,6 +527,17 @@ def derive_ops_view(entries: List[Tuple], stats: Dict,
     potential = stats["cost"] + stats["savings"]
     cache_eff = (stats["savings"] / potential * 100) if potential > 0 else 0.0
     costs = stats["costs"]
+
+    # Median tokens-per-call: collect today's in+out per entry, sort, pick mid.
+    today_str = now.strftime("%Y-%m-%d")
+    tok_per_call = sorted(
+        e.get(FIELD_TOKENS_IN, 0) + e.get(FIELD_TOKENS_OUT, 0)
+        for dt, _, e in entries
+        if dt.strftime("%Y-%m-%d") == today_str
+        and e.get("source") != "agent_spawn"
+    )
+    median_tokens = tok_per_call[len(tok_per_call) // 2] if tok_per_call else 0
+
     return OpsView(
         stats=stats,
         today_cost=stats["cost"],
@@ -510,7 +546,10 @@ def derive_ops_view(entries: List[Tuple], stats: Dict,
         median_cost=percentile(costs, 0.5),
         p95_cost=percentile(costs, 0.95),
         max_call_cost=costs[-1] if costs else 0.0,
+        median_tokens=median_tokens,
         hour_cost=hourly_cost_today(entries),
+        hour_tokens=hourly_tokens_today(entries),
+        hour_requests=hourly_requests_today(entries),
     )
 
 
@@ -552,6 +591,8 @@ class RecentView:
     requests_1h: int
     requests_6h: int
     requests_12h: int
+    tokens_1h: int
+    tokens_6h: int
     tokens_12h: int
 
     model_cost_12h: Dict[str, float]      # short_model → $ in window
@@ -599,7 +640,7 @@ def derive_recent_view(entries: List[Tuple], short_project_fn,
 
     cost_1h = cost_6h = cost_12h = 0.0
     req_1h = req_6h = req_12h = 0
-    tokens_12h = 0
+    tokens_1h = tokens_6h = tokens_12h = 0
     model_cost: Dict[str, float] = defaultdict(float)
     project_cost: Dict[str, float] = defaultdict(float)
     last_call_dt: Optional[datetime] = None
@@ -630,9 +671,11 @@ def derive_recent_view(entries: List[Tuple], short_project_fn,
         if age_hrs <= 1.0:
             cost_1h += cost
             req_1h += 1
+            tokens_1h += tokens
         if age_hrs <= 6.0:
             cost_6h += cost
             req_6h += 1
+            tokens_6h += tokens
 
         sm = short_model_fn(e.get("model"))
         model_cost[sm] += cost
@@ -660,6 +703,8 @@ def derive_recent_view(entries: List[Tuple], short_project_fn,
         requests_1h=req_1h,
         requests_6h=req_6h,
         requests_12h=req_12h,
+        tokens_1h=tokens_1h,
+        tokens_6h=tokens_6h,
         tokens_12h=tokens_12h,
         model_cost_12h=dict(model_cost),
         project_cost_12h=dict(project_cost),

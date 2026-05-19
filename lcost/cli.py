@@ -30,18 +30,18 @@ def parse_arguments() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  llmcars                       # Interactive dashboard (default)
-  llmcars --report              # Text report, last 30 active days
-  llmcars --report --days 7     # Last 7 active days
-  llmcars --report --all        # All days with activity
-  llmcars --source cline        # Dashboard, Cline only
-  llmcars --source claude-code  # Dashboard, Claude Code only
-  llmcars --cached              # Skip scanning live sources
-  llmcars --rescan              # Rescan all files from scratch
-  llmcars --deep                # Re-parse every file (dedups; data-safe)
-  llmcars --stats               # Print ledger stats and exit
-  llmcars --recalc --dry-run    # Preview cost correction without writing
-  llmcars --recalc              # Rewrite ledger costs using current rates
+  lcost                       # Interactive dashboard (default)
+  lcost --report              # Text report, last 30 active days
+  lcost --report --days 7     # Last 7 active days
+  lcost --report --all        # All days with activity
+  lcost --source cline        # Dashboard, Cline only
+  lcost --source claude-code  # Dashboard, Claude Code only
+  lcost --cached              # Skip scanning live sources
+  lcost --rescan              # Rescan all files from scratch
+  lcost --deep                # Re-parse every file (dedups; data-safe)
+  lcost --stats               # Print ledger stats and exit
+  lcost --recalc --dry-run    # Preview cost correction without writing
+  lcost --recalc              # Rewrite ledger costs using current rates
         """
     )
     mode = parser.add_mutually_exclusive_group()
@@ -119,7 +119,7 @@ Examples:
     parser.add_argument(
         '--force', action='store_true',
         help='override the single-instance lock and launch the TUI even '
-             'if another llmcars TUI appears to be running'
+             'if another lcost TUI appears to be running'
     )
     return parser.parse_args()
 
@@ -230,11 +230,11 @@ def main():
 
     if not args.report:
         try:
-            from llmcars.tui import CostTrackerApp
+            from lcost.tui import CostTrackerApp
         except ImportError:
-            print("TUI requires: pip install 'llmcars[tui]'")
+            print("TUI requires: pip install 'lcost[tui]'")
             return 1
-        from llmcars.pidfile import AlreadyRunning, single_instance
+        from lcost.pidfile import AlreadyRunning, single_instance
         try:
             with single_instance(force=args.force):
                 app = CostTrackerApp(

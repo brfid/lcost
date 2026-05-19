@@ -70,7 +70,7 @@ def resolve_source_cli(value: str) -> str:
 
 # ── Data-dir helper ───────────────────────────────────────────────────────
 
-APP_NAME = "llmcars"
+APP_NAME = "lcost"
 # Legacy dir we'll auto-migrate from on first run.
 LEGACY_APP_NAMES = ("claudit",)
 
@@ -83,7 +83,7 @@ def _xdg_data_home() -> Path:
 
 
 def data_dir(create: bool = True) -> Path:
-    """Return the on-disk data root for llmcars.
+    """Return the on-disk data root for lcost.
 
     If an old ``claudit`` data dir exists and the new one doesn't, migrate
     it by renaming. Prints a single-line notice. Idempotent.
@@ -107,7 +107,7 @@ def data_dir(create: bool = True) -> Path:
 
 
 def cache_dir(create: bool = True) -> Path:
-    """Return the on-disk cache root for llmcars (holds the TUI pidfile)."""
+    """Return the on-disk cache root for lcost (holds the TUI pidfile)."""
     xdg = os.environ.get("XDG_CACHE_HOME")
     base = Path(xdg) if xdg else Path.home() / ".cache"
     new_dir = base / APP_NAME

@@ -1,4 +1,4 @@
-# llmcars
+# lcost
 
 Tracks LLM API spend across Claude Code and Cline. Reads session files written by each tool, deduplicates against a local ledger, and reports cost and token breakdowns across multiple providers (Anthropic, OpenAI, Amazon Bedrock, Google, Meta, Mistral).
 
@@ -16,11 +16,19 @@ For the interactive dashboard:
 - [textual](https://pypi.org/project/textual/)
 - [textual-plotext](https://pypi.org/project/textual-plotext/)
 
+### Terminal compatibility
+
+The dashboard uses standard Unicode block elements (`█ ░ ▓ ▁▂▃▄▅▆▇`) that render correctly in most monospace fonts, including macOS Terminal.app's default Menlo. Line charts (DAILY, CACHE) use dot markers and look fine everywhere.
+
+**Known macOS Terminal.app artifact:** multi-row sparklines (OVERVIEW stat boxes) show a faint horizontal gap line through the middle of each bar. This is caused by Terminal.app's fixed inter-row line spacing, which inserts vertical padding between character rows that Textual cannot override. The bars are still readable; the gap is cosmetic. It does not appear in iTerm2 or other terminals with configurable line height.
+
+For the best experience — no gap lines, sharper chart lines, full glyph coverage — use iTerm2 (free) with any monospace font. macOS Terminal.app works without any configuration changes.
+
 ## Install
 
 ```bash
-git clone https://github.com/brfid/llmcars.git
-cd llmcars
+git clone https://github.com/brfid/lcost.git
+cd lcost
 pip install -e .
 ```
 
@@ -38,25 +46,25 @@ pip install -e '.[tui]'
 
 ### Migrating from `claudit`
 
-The package was renamed from `claudit` to `llmcars`. On first run, llmcars automatically renames legacy data/cache dirs:
+The package was renamed from `claudit` to `lcost`. On first run, lcost automatically renames legacy data/cache dirs:
 
-- `~/.local/share/claudit/` → `~/.local/share/llmcars/`
-- `~/.cache/claudit/` → `~/.cache/llmcars/`
+- `~/.local/share/claudit/` → `~/.local/share/lcost/`
+- `~/.cache/claudit/` → `~/.cache/lcost/`
 
-No manual migration needed. The old `claudit` CLI is gone — use `llmcars`.
+No manual migration needed. The old `claudit` CLI is gone — use `lcost`.
 
 ## Get started
 
 Run with no arguments to launch the interactive dashboard:
 
 ```bash
-llmcars
+lcost
 ```
 
 Print a text report instead:
 
 ```bash
-llmcars --report
+lcost --report
 ```
 
 ## Usage
@@ -64,9 +72,9 @@ llmcars --report
 ### Filter by time range
 
 ```bash
-llmcars --report --days 7                              # Last 7 active days
-llmcars --report --all                                 # All days with activity
-llmcars --report --from 2026-04-01 --to 2026-04-30    # Specific range
+lcost --report --days 7                              # Last 7 active days
+lcost --report --all                                 # All days with activity
+lcost --report --from 2026-04-01 --to 2026-04-30    # Specific range
 ```
 
 `--from` / `--to` are inclusive ISO dates. When either is set, it overrides `--days`.
@@ -74,8 +82,8 @@ llmcars --report --from 2026-04-01 --to 2026-04-30    # Specific range
 ### Filter by source
 
 ```bash
-llmcars --source cline         # Cline only
-llmcars --source claude-code   # Claude Code only
+lcost --source cline         # Cline only
+lcost --source claude-code   # Claude Code only
 ```
 
 ### Filter by project
@@ -83,14 +91,14 @@ llmcars --source claude-code   # Claude Code only
 Case-insensitive substring match against the project path stored per entry:
 
 ```bash
-llmcars --project techdocs-tools
-llmcars --project dotfiles --days 60
+lcost --project techdocs-tools
+lcost --project dotfiles --days 60
 ```
 
 ### Inspect the ledger
 
 ```bash
-llmcars --stats
+lcost --stats
 ```
 
 Prints file size, entry counts by source, date range, top projects, last ingest time, and backup count.
@@ -100,10 +108,10 @@ Prints file size, entry counts by source, date range, top projects, last ingest 
 By default each run scans live data incrementally (unchanged files skipped, growing JSONL files resumed from the last byte offset). You can override:
 
 ```bash
-llmcars --cached            # Skip scanning, report from stored data only
-llmcars --rescan            # Ignore stored state, rescan all files from byte 0
-llmcars --deep              # Re-parse every session file; keeps ledger entries, deduplicates
-llmcars --max-gap-hours 12  # Auto-promote to deep rescan if last ingest was >12h ago (default: 24)
+lcost --cached            # Skip scanning, report from stored data only
+lcost --rescan            # Ignore stored state, rescan all files from byte 0
+lcost --deep              # Re-parse every session file; keeps ledger entries, deduplicates
+lcost --max-gap-hours 12  # Auto-promote to deep rescan if last ingest was >12h ago (default: 24)
 ```
 
 Use `--deep` when you suspect missed sessions. Use `--rescan` after recovering from a corrupt or missing ingest state.
@@ -113,8 +121,8 @@ Use `--deep` when you suspect missed sessions. Use `--rescan` after recovering f
 If a provider updates rates, recalculate stored costs against the current pricing table:
 
 ```bash
-llmcars --recalc --dry-run  # Preview changes without writing
-llmcars --recalc            # Rewrite costs in the ledger
+lcost --recalc --dry-run  # Preview changes without writing
+lcost --recalc            # Rewrite costs in the ledger
 ```
 
 Entries whose model family has no configured rates (see [Pricing](#pricing) below) are **skipped** — their stored cost is preserved. `--recalc` prints a `skipped` count alongside `changed`.
@@ -129,7 +137,7 @@ Entries whose model family has no configured rates (see [Pricing](#pricing) belo
 
 ## Dashboard
 
-Launch with `llmcars` (the default mode).
+Launch with `lcost` (the default mode).
 
 ### Tabs
 
@@ -185,7 +193,7 @@ The status bar shows entry count, active days, refresh state, and a `+N new` bad
 
 ## How it works
 
-On each run, llmcars:
+On each run, lcost:
 
 1. Scans session data from Cline and Claude Code in parallel.
 2. Deduplicates entries against a local `ledger.json` by entry ID.
@@ -194,7 +202,7 @@ On each run, llmcars:
 
 Scanning is incremental — unchanged files are skipped and growing JSONL files resume from the last byte offset. State is stored in `ingest_state.json`.
 
-If more than `--max-gap-hours` have elapsed since the last ingest (default: 24h), llmcars auto-promotes to a deep rescan, re-parsing every session file from byte zero. Dedup by entry ID keeps the result consistent. This is the safety net against Claude Code's session cleanup window — as long as you run llmcars at least once per that window, no data is lost.
+If more than `--max-gap-hours` have elapsed since the last ingest (default: 24h), lcost auto-promotes to a deep rescan, re-parsing every session file from byte zero. Dedup by entry ID keeps the result consistent. This is the safety net against Claude Code's session cleanup window — as long as you run lcost at least once per that window, no data is lost.
 
 The ledger is backed up daily to `backups/ledger-YYYY-MM-DD.json` (7 copies retained). To roll back, copy a backup over `ledger.json`.
 
@@ -218,7 +226,7 @@ Each ingested Claude Code call stores:
 
 ### Pricing
 
-Pricing is per model family, keyed off a single `FAMILIES` registry in `llmcars/pricing.py`. Rates are USD per million tokens.
+Pricing is per model family, keyed off a single `FAMILIES` registry in `lcost/pricing.py`. Rates are USD per million tokens.
 
 | Family | Input | Output | Cache write | Cache read | Source |
 |---|---|---|---|---|---|
@@ -249,11 +257,11 @@ Exact model IDs are matched first. Verify rates against each provider's pricing 
 
 - **Survives session cleanup** — once ingested, entries persist in the ledger indefinitely.
 - **No double-counting** — re-scanning the same data is safe; dedup is by entry ID.
-- **Non-destructive** — llmcars never modifies source data.
+- **Non-destructive** — lcost never modifies source data.
 
 ## Data files
 
-All files are stored in `~/.local/share/llmcars/` by default (`$XDG_DATA_HOME/llmcars/` if set).
+All files are stored in `~/.local/share/lcost/` by default (`$XDG_DATA_HOME/lcost/` if set).
 
 | File | Description |
 |---|---|
@@ -261,12 +269,12 @@ All files are stored in `~/.local/share/llmcars/` by default (`$XDG_DATA_HOME/ll
 | `ingest_state.json` | Per-file byte offsets for incremental scanning (safe to delete) |
 | `backups/ledger-YYYY-MM-DD.json` | Daily ledger snapshots, last 7 retained |
 
-Pidfile and caches live in `~/.cache/llmcars/` (`$XDG_CACHE_HOME/llmcars/` if set).
+Pidfile and caches live in `~/.cache/lcost/` (`$XDG_CACHE_HOME/lcost/` if set).
 
 ## Tests
 
 ```bash
-cd llmcars
+cd lcost
 pytest tests/ -v
 ```
 
