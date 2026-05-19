@@ -85,6 +85,7 @@ class OverviewMetrics:
     tokens_7d_total: int
     tokens_7d_in: int
     tokens_7d_out: int
+    cost_per_1k_out_7d: float   # $/1K output tokens over last 7 days
     cache_savings_30d: float
     cache_eff_label: str
     burn_rate: float
@@ -161,6 +162,9 @@ def _overview(daily: Dict[str, Dict], clock: ClockBucket) -> OverviewMetrics:
     )
     burn_rate = sum(spark_7d_cost) / len(last_7) if last_7 else 0
 
+    cost_7d = sum(spark_7d_cost)
+    cost_per_1k_out_7d = (cost_7d / tokens_out_7d * 1000) if tokens_out_7d > 0 else 0.0
+
     return OverviewMetrics(
         today_cost=today_data[FIELD_COST],
         today_requests=today_data[FIELD_REQUESTS],
@@ -171,6 +175,7 @@ def _overview(daily: Dict[str, Dict], clock: ClockBucket) -> OverviewMetrics:
         tokens_7d_total=sum(spark_7d_tokens),
         tokens_7d_in=tokens_in_7d,
         tokens_7d_out=tokens_out_7d,
+        cost_per_1k_out_7d=cost_per_1k_out_7d,
         cache_savings_30d=totals_30[FIELD_CACHE_SAVINGS],
         cache_eff_label=cache_eff_label,
         burn_rate=burn_rate,

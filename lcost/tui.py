@@ -1,4 +1,4 @@
-"""LLMCARS — LCARS-style TUI dashboard for llmcars."""
+"""LLMCARS — LCARS-style TUI dashboard for lcost."""
 
 import contextlib
 from datetime import datetime, timedelta
@@ -58,23 +58,21 @@ from .ops_widgets import (
     LogRow,
 )
 
-# Tab order: live → trends → patterns → distribution. Each block answers
-# one user question and groups visually similar charts. Bindings 1–9 stay
-# clean (no orphan letter keys for routine tabs).
+# Tab order: live → trends → patterns → distribution.
+# One tab per imposition; metric is always the toggle (m).
+# Bindings 1–7 stay clean.
 TABS = [
     # Live: what's happening right now / today
     "OVERVIEW",   # 1 — universal entry point, dense at-a-glance
-    "RECENT",     # 2 — rolling 12h, fine-grained
-    "OPS",        # 3 — today + call log
-    # Trends: how am I trending over weeks
-    "DAILY",      # 4 — daily cost line
-    "TOKENS",     # 5 — input/output + cache trends
-    "CACHE",      # 6 — savings vs efficiency
+    "RECENT",     # 2 — rolling 12h bars · m cycles cost/requests/tokens
+    "OPS",        # 3 — today + call log (h cycles hourly bar metric)
+    # Trends: daily time series
+    "TREND",      # 4 — daily bars/lines · m cycles cost/tokens-io/tokens-cache/savings
     # Patterns: when do I work
-    "CALENDAR",   # 7 — daily heatmap (cost / requests, m toggles)
-    "COST MAP",   # 8 — hour × day-of-week
+    "CALENDAR",   # 5 — 40-week heatmap · m cycles cost/requests
+    "HEATMAP",    # 6 — hour×weekday · m cycles cost/requests/tokens
     # Distribution
-    "CALLS",      # 9 — per-call cost histogram
+    "CALLS",      # 7 — per-call cost histogram
 ]
 
 
@@ -123,7 +121,7 @@ _STOP_COLORS = {
 
 
 class CostTrackerApp(App):
-    CSS_PATH = Path(__file__).resolve().parent / "llmcars.tcss"
+    CSS_PATH = Path(__file__).resolve().parent / "lcost.tcss"
     TITLE = "LLMCARS"
     REFRESH_INTERVAL = 30
     NEW_ROW_HIGHLIGHT_TICKS = 2
@@ -146,19 +144,20 @@ class CostTrackerApp(App):
         Binding("enter", "expand_selected", "Expand row", show=False),
         # Number shortcuts. Layout matches the TABS list above:
         #   1 OVERVIEW    2 RECENT    3 OPS
-        #   4 DAILY       5 TOKENS    6 CACHE
-        #   7 CALENDAR    8 COST MAP  9 CALLS
+        #   4 TREND       5 CALENDAR  6 HEATMAP   7 CALLS
         Binding("1", "tab('OVERVIEW')", "Overview", show=False),
         Binding("2", "tab('RECENT')", "Recent", show=False),
         Binding("3", "tab('OPS')", "Ops", show=False),
-        Binding("4", "tab('DAILY')", "Daily", show=False),
-        Binding("5", "tab('TOKENS')", "Tokens", show=False),
-        Binding("6", "tab('CACHE')", "Cache", show=False),
-        Binding("7", "tab('CALENDAR')", "Calendar", show=False),
-        Binding("8", "tab('COST MAP')", "Cost Map", show=False),
-        Binding("9", "tab('CALLS')", "Calls", show=False),
-        # CALENDAR-only metric toggle (cost ↔ requests)
-        Binding("m", "toggle_calendar_metric", "Toggle metric",
+        Binding("4", "tab('TREND')", "Trend", show=False),
+        Binding("5", "tab('CALENDAR')", "Calendar", show=False),
+        Binding("6", "tab('HEATMAP')", "Heatmap", show=False),
+        Binding("7", "tab('CALLS')", "Calls", show=False),
+        # Unified metric toggle — dispatches by current tab
+        # RECENT: cost/requests/tokens  TREND: cost/tokens-io/tokens-cache/savings
+        # CALENDAR: cost/requests       HEATMAP: cost/requests/tokens
+        Binding("m", "toggle_metric", "Toggle metric", show=False),
+        # OPS-only hourly-bar metric toggle (cost / tokens / requests)
+        Binding("h", "toggle_hourly_metric", "Toggle hourly metric",
                 show=False),
     ]
 
@@ -182,10 +181,17 @@ class CostTrackerApp(App):
         self._selected_row: int = -1
         # Per-row spec cache so selection moves don't rebuild labels
         self._ops_row_specs: List[RowSpec] = []
-        # CALENDAR tab can switch metric — "cost" (amber, $) or
-        # "requests" (periwinkle, count). Persists for the session so
-        # users don't have to re-toggle on every tab visit.
+        # Per-tab metric state — all sticky across tab switches.
+        # CALENDAR: cost ↔ requests
         self._calendar_metric: str = "cost"
+        # RECENT: cost → requests → tokens
+        self._recent_metric: str = "cost"
+        # TREND: cost → tokens_io → tokens_cache → savings
+        self._trend_metric: str = "cost"
+        # HEATMAP: cost → requests → tokens
+        self._heatmap_metric: str = "cost"
+        # OPS hourly bar cycles: "cost" → "tokens" → "requests"
+        self._hourly_metric: str = "cost"
         # Reactive snapshot carrier — mounted in compose(); every live
         # widget subscribes to its `snapshot` attribute.
         self._metrics = LiveMetrics()
@@ -321,8 +327,7 @@ class CostTrackerApp(App):
     # (or hourly grid, for COST MAP) actually changed. RECENT is included
     # because its 12h window slides with the clock, not the daily aggregate.
     _CHART_TABS = frozenset({
-        "DAILY", "CALENDAR", "TOKENS", "CACHE",
-        "COST MAP", "CALLS", "RECENT",
+        "TREND", "CALENDAR", "HEATMAP", "CALLS", "RECENT",
     })
 
     def _auto_refresh_tick(self) -> None:
@@ -485,32 +490,61 @@ class CostTrackerApp(App):
     def _render_tab(self, tab_name: str) -> None:
         self._current_tab = tab_name
         builders = {
-            "OVERVIEW": self._build_overview,
-            "RECENT": self._build_recent,
-            "OPS": self._build_ops,
-            "DAILY": self._build_cost_chart,
-            "TOKENS": self._build_tokens_chart,
-            "CACHE": self._build_cache_chart,
-            "CALENDAR": self._build_calendar_heatmap,
-            "COST MAP": self._build_spend_heatmap,
-            "CALLS": self._build_cost_histogram,
+            "OVERVIEW":  self._build_overview,
+            "RECENT":    self._build_recent,
+            "OPS":       self._build_ops,
+            "TREND":     self._build_trend,
+            "CALENDAR":  self._build_calendar_heatmap,
+            "HEATMAP":   self._build_heatmap,
+            "CALLS":     self._build_cost_histogram,
         }
         container = self.query_one("#panel-container", Vertical)
         container.remove_children()
         container.mount(builders[tab_name]())
 
-    def action_toggle_calendar_metric(self) -> None:
-        """Cycle CALENDAR between cost ($) and requests (count).
+    def action_toggle_hourly_metric(self) -> None:
+        """Cycle OPS hourly bar between cost / tokens / requests.
 
-        No-op outside CALENDAR. The metric is sticky across tab switches
-        so users don't have to re-toggle every visit.
+        No-op outside OPS. Sticky for the session.
         """
-        if self._current_tab != "CALENDAR":
+        if self._current_tab != "OPS":
             return
-        self._calendar_metric = (
-            "requests" if self._calendar_metric == "cost" else "cost"
-        )
-        self._render_tab("CALENDAR")
+        cycle = {"cost": "tokens", "tokens": "requests", "requests": "cost"}
+        self._hourly_metric = cycle[self._hourly_metric]
+        self._render_tab("OPS")
+
+    def action_toggle_metric(self) -> None:
+        """Unified m-key metric toggle — dispatches by current tab.
+
+        RECENT:   cost → requests → tokens → cost
+        TREND:    cost → tokens_io → tokens_cache → savings → cost
+        CALENDAR: cost ↔ requests
+        HEATMAP:  cost → requests → tokens → cost
+        No-op on tabs without a metric toggle.
+        """
+        tab = self._current_tab
+        if tab == "RECENT":
+            cycle = {"cost": "requests", "requests": "tokens", "tokens": "cost"}
+            self._recent_metric = cycle[self._recent_metric]
+            self._render_tab("RECENT")
+        elif tab == "TREND":
+            cycle = {
+                "cost": "tokens_io",
+                "tokens_io": "tokens_cache",
+                "tokens_cache": "savings",
+                "savings": "cost",
+            }
+            self._trend_metric = cycle[self._trend_metric]
+            self._render_tab("TREND")
+        elif tab == "CALENDAR":
+            self._calendar_metric = (
+                "requests" if self._calendar_metric == "cost" else "cost"
+            )
+            self._render_tab("CALENDAR")
+        elif tab == "HEATMAP":
+            cycle = {"cost": "requests", "requests": "tokens", "tokens": "cost"}
+            self._heatmap_metric = cycle[self._heatmap_metric]
+            self._render_tab("HEATMAP")
 
     @staticmethod
     def _init_plt(plot: PlotextPlot):
@@ -605,6 +639,7 @@ class CostTrackerApp(App):
                 self._metrics, "TOKENS (7d)",
                 value_selector=lambda s: format_tokens(m(s).tokens_7d_total),
                 detail_selector=lambda s: (
+                    f"{format_cost(m(s).cost_per_1k_out_7d)}/1K out · "
                     f"{format_tokens(m(s).tokens_7d_in)} in / "
                     f"{format_tokens(m(s).tokens_7d_out)} out"
                 ),
@@ -630,117 +665,130 @@ class CostTrackerApp(App):
 
         return Vertical(stats_row, classes="chart-panel")
 
-    # ── Cost timeline chart ──
-
-    def _build_cost_chart(self) -> Widget:
-        sorted_days = sorted(self._daily.keys())[-60:]
-        dates = list(range(len(sorted_days)))
-        costs = [self._daily[d][FIELD_COST] for d in sorted_days]
-        total_cost = sum(costs)
-
-        def draw(plt):
-            plt.plot(dates, costs, marker="braille", color=(255, 153, 0))
-            self._set_date_xticks(plt, sorted_days, dates)
-            self._set_yticks(plt, costs, format_cost)
-
-        subtitle = (
-            f"{sorted_days[0]} → {sorted_days[-1]}  ◥  "
-            f"Total: {format_cost(total_cost)}  ◥  "
-            f"Avg: {format_cost(total_cost / len(costs))}/day"
-            if sorted_days else ""
-        )
-        return self._make_chart("DAILY COST ($)", draw, subtitle)
-
-    # ── Tokens charts ──
+    # ── TREND tab ───────────────────────────────────────────────────────
     #
-    # Cache reads typically dwarf input/output by 10–500×, so a single shared
-    # axis crushes the I/O bars to invisibility. Split into two stacked
-    # panels with independent scales: top shows generated traffic (input +
-    # output), bottom shows cache traffic (writes + reads). Each subtitle
-    # carries the totals so quick comparisons don't require eyeballing the
-    # axis.
+    # Daily time-series. `m` cycles four views:
+    #   cost       — 60d line chart of daily spend
+    #   tokens_io  — 30d grouped bars: input + output
+    #   tokens_cache — 30d grouped bars: cache writes + reads
+    #   savings    — 60d dual-axis: cache savings ($) + efficiency (%)
 
-    def _build_tokens_chart(self) -> Widget:
-        sorted_days = sorted(self._daily.keys())[-30:]
-        if not sorted_days:
-            return self._chart_panel("No token data", Label(""))
+    def _build_trend(self) -> Widget:
+        metric = self._trend_metric
+        _cycle = {
+            "cost": "tokens_io",
+            "tokens_io": "tokens_cache",
+            "tokens_cache": "savings",
+            "savings": "cost",
+        }
+        next_m = _cycle[metric]
 
-        labels = [d[5:] for d in sorted_days]
-        tokens_in = [self._daily[d][FIELD_TOKENS_IN] for d in sorted_days]
-        tokens_out = [self._daily[d][FIELD_TOKENS_OUT] for d in sorted_days]
-        cache_w = [self._daily[d][FIELD_CACHE_WRITES] for d in sorted_days]
-        cache_r = [self._daily[d][FIELD_CACHE_READS] for d in sorted_days]
+        if metric == "cost":
+            sorted_days = sorted(self._daily.keys())[-60:]
+            if not sorted_days:
+                return self._chart_panel("No data", Label(""))
+            dates = list(range(len(sorted_days)))
+            costs = [self._daily[d][FIELD_COST] for d in sorted_days]
+            total_cost = sum(costs)
 
-        def _fmt_tok(v):
-            return format_tokens(int(v), compact=True)
+            def draw_fn(plt):
+                plt.plot(dates, costs, marker="dot", color=(255, 153, 0))
+                self._set_date_xticks(plt, sorted_days, dates)
+                self._set_yticks(plt, costs, format_cost)
 
-        def draw_io(plt):
-            plt.multiple_bar(
-                labels,
-                [tokens_in, tokens_out],
-                labels=["Input", "Output"],
-                color=[(255, 153, 0), (204, 102, 153)],
+            title = "DAILY COST — 60d ($)"
+            subtitle = (
+                f"{sorted_days[0]} → {sorted_days[-1]}  ◥  "
+                f"Total: {format_cost(total_cost)}  ◥  "
+                f"Avg: {format_cost(total_cost / len(costs))}/day  ◥  "
+                f"[dim]\\[m] → {next_m}[/]"
             )
-            self._set_yticks(plt, tokens_in + tokens_out, _fmt_tok)
 
-        def draw_cache(plt):
-            plt.multiple_bar(
-                labels,
-                [cache_w, cache_r],
-                labels=["Cache Write", "Cache Read"],
-                color=[(153, 153, 204), (204, 153, 204)],
+        elif metric == "tokens_io":
+            sorted_days = sorted(self._daily.keys())[-30:]
+            if not sorted_days:
+                return self._chart_panel("No data", Label(""))
+            labels = [d[5:] for d in sorted_days]
+            tokens_in = [self._daily[d][FIELD_TOKENS_IN] for d in sorted_days]
+            tokens_out = [self._daily[d][FIELD_TOKENS_OUT] for d in sorted_days]
+
+            def _fmt_tok(v):
+                return format_tokens(int(v), compact=True)
+
+            def draw_fn(plt):
+                plt.multiple_bar(
+                    labels,
+                    [tokens_in, tokens_out],
+                    labels=["Input", "Output"],
+                    color=[(255, 153, 0), (204, 102, 153)],
+                )
+                self._set_yticks(plt, tokens_in + tokens_out, _fmt_tok)
+
+            title = "GENERATED TOKENS — INPUT & OUTPUT (30d)"
+            subtitle = (
+                f"In: {format_tokens(sum(tokens_in))}  ◥  "
+                f"Out: {format_tokens(sum(tokens_out))}  ◥  "
+                f"[dim]\\[m] → {next_m}[/]"
             )
-            self._set_yticks(plt, cache_w + cache_r, _fmt_tok)
 
-        io_subtitle = (
-            f"30d totals  ◥  "
-            f"In: {format_tokens(sum(tokens_in))}  ◥  "
-            f"Out: {format_tokens(sum(tokens_out))}"
-        )
-        cache_subtitle = (
-            f"30d totals  ◥  "
-            f"Writes: {format_tokens(sum(cache_w))}  ◥  "
-            f"Reads: {format_tokens(sum(cache_r))}"
-        )
+        elif metric == "tokens_cache":
+            sorted_days = sorted(self._daily.keys())[-30:]
+            if not sorted_days:
+                return self._chart_panel("No data", Label(""))
+            labels = [d[5:] for d in sorted_days]
+            cache_w = [self._daily[d][FIELD_CACHE_WRITES] for d in sorted_days]
+            cache_r = [self._daily[d][FIELD_CACHE_READS] for d in sorted_days]
 
-        io_panel = self._make_chart(
-            "GENERATED TOKENS — INPUT & OUTPUT (30d)",
-            draw_io, io_subtitle,
-        )
-        cache_panel = self._make_chart(
-            "CACHE TOKENS — WRITES & READS (30d)",
-            draw_cache, cache_subtitle,
-        )
-        return Vertical(io_panel, cache_panel, classes="chart-panel chart-stack")
+            def _fmt_tok(v):
+                return format_tokens(int(v), compact=True)
 
-    # ── Cache chart ──
+            def draw_fn(plt):
+                plt.multiple_bar(
+                    labels,
+                    [cache_w, cache_r],
+                    labels=["Cache Write", "Cache Read"],
+                    color=[(153, 153, 204), (204, 153, 204)],
+                )
+                self._set_yticks(plt, cache_w + cache_r, _fmt_tok)
 
-    def _build_cache_chart(self) -> Widget:
-        sorted_days = sorted(self._daily.keys())[-60:]
-        dates = list(range(len(sorted_days)))
-        savings = [self._daily[d][FIELD_CACHE_SAVINGS] for d in sorted_days]
-        costs = [self._daily[d][FIELD_COST] for d in sorted_days]
-        pcts = [
-            (s / (s + c) * 100) if (s + c) > 0 else 0
-            for s, c in zip(savings, costs)
-        ]
-        total_saved = sum(savings)
+            title = "CACHE TOKENS — WRITES & READS (30d)"
+            subtitle = (
+                f"Writes: {format_tokens(sum(cache_w))}  ◥  "
+                f"Reads: {format_tokens(sum(cache_r))}  ◥  "
+                f"[dim]\\[m] → {next_m}[/]"
+            )
 
-        def draw(plt):
-            plt.plot(dates, savings, marker="braille", label="Savings ($)",
-                     color=(153, 153, 204))
-            plt.plot(dates, pcts, marker="braille", label="Efficiency (%)",
-                     color=(255, 153, 0), yside="right")
-            self._set_date_xticks(plt, sorted_days, dates)
-            self._set_yticks(plt, savings, format_cost, yside="left")
-            self._set_yticks(plt, pcts, lambda v: f"{v:.0f}%", yside="right")
+        else:  # savings
+            sorted_days = sorted(self._daily.keys())[-60:]
+            if not sorted_days:
+                return self._chart_panel("No data", Label(""))
+            dates = list(range(len(sorted_days)))
+            savings = [self._daily[d][FIELD_CACHE_SAVINGS] for d in sorted_days]
+            costs = [self._daily[d][FIELD_COST] for d in sorted_days]
+            pcts = [
+                (s / (s + c) * 100) if (s + c) > 0 else 0.0
+                for s, c in zip(savings, costs)
+            ]
+            total_saved = sum(savings)
 
-        subtitle = (
-            f"Total saved: {format_cost(total_saved)}  ◥  "
-            f"Avg efficiency: {sum(pcts) / len(pcts):.0f}%"
-            if pcts else ""
-        )
-        return self._make_chart("CACHE PERFORMANCE", draw, subtitle)
+            def draw_fn(plt):
+                plt.plot(dates, savings, marker="dot", label="Savings ($)",
+                         color=(153, 153, 204))
+                plt.plot(dates, pcts, marker="dot", label="Efficiency (%)",
+                         color=(255, 153, 0), yside="right")
+                self._set_date_xticks(plt, sorted_days, dates)
+                self._set_yticks(plt, savings, format_cost, yside="left")
+                self._set_yticks(plt, pcts, lambda v: f"{v:.0f}%", yside="right")
+
+            title = "CACHE PERFORMANCE — SAVINGS & EFFICIENCY (60d)"
+            avg_eff = sum(pcts) / len(pcts) if pcts else 0.0
+            subtitle = (
+                f"Total saved: {format_cost(total_saved)}  ◥  "
+                f"Avg efficiency: {avg_eff:.0f}%  ◥  "
+                f"[dim]\\[m] → {next_m}[/]"
+            )
+
+        return self._make_chart(title, draw_fn, subtitle)
 
     # ── Calendar heatmap (GitHub-style, with metric toggle) ──
     #
@@ -827,35 +875,86 @@ class CostTrackerApp(App):
         )
         return self._chart_panel(title, heatmap, subtitle)
 
-    # ── Spend heatmap (cost by hour × day-of-week) ──
+    # ── HEATMAP tab (hour × weekday, metric toggle) ──────────────────────
+    #
+    # Replaces the old COST MAP tab. `m` cycles cost → requests → tokens.
+    # Each metric uses its own color ramp so the visual language stays
+    # consistent with the rest of the app (amber=cost, mauve=requests,
+    # periwinkle=tokens).
 
-    def _build_spend_heatmap(self) -> Widget:
-        grid = aggregate_hourly_cost_heatmap(self._ledger, self._source_filter)
+    def _build_heatmap(self) -> Widget:
+        metric = self._heatmap_metric
+        _cycle = {"cost": "requests", "requests": "tokens", "tokens": "cost"}
+        next_m = _cycle[metric]
+
+        # Build 7×24 grid for the selected metric.
+        grid = [[0.0] * 24 for _ in range(7)]
+        for dt, entry in _iter_individual_entries(self._ledger, self._source_filter):
+            if metric == "cost":
+                val = entry.get(FIELD_COST, 0)
+            elif metric == "requests":
+                val = 1.0
+            else:  # tokens
+                val = float(
+                    entry.get(FIELD_TOKENS_IN, 0) + entry.get(FIELD_TOKENS_OUT, 0)
+                )
+            grid[dt.weekday()][dt.hour] += val
 
         flat = [v for row in grid for v in row if v > 0]
-        total_cost = sum(v for row in grid for v in row)
+        total_v = sum(v for row in grid for v in row)
+
         if flat:
             peak_val = max(flat)
-            peak_idx = [(d, h) for d in range(7) for h in range(24)
-                        if grid[d][h] == peak_val][0]
-            peak_label = f"{DAY_NAMES[peak_idx[0]]} {peak_idx[1]:02d}:00 ({format_cost(peak_val)})"
+            peak_day, peak_hour = next(
+                (d, h) for d in range(7) for h in range(24)
+                if grid[d][h] == peak_val
+            )
+            if metric == "cost":
+                peak_label = (
+                    f"{DAY_NAMES[peak_day]} {peak_hour:02d}:00 "
+                    f"({format_cost(peak_val)})"
+                )
+                total_label = format_cost(total_v)
+                title = "HEATMAP — COST BY HOUR × WEEKDAY"
+                color_low, color_high = (80, 30, 0), (255, 140, 0)
+            elif metric == "requests":
+                peak_label = (
+                    f"{DAY_NAMES[peak_day]} {peak_hour:02d}:00 "
+                    f"({int(peak_val):,} req)"
+                )
+                total_label = f"{int(total_v):,} req"
+                title = "HEATMAP — REQUESTS BY HOUR × WEEKDAY"
+                color_low, color_high = (40, 30, 70), (180, 100, 200)
+            else:  # tokens
+                peak_label = (
+                    f"{DAY_NAMES[peak_day]} {peak_hour:02d}:00 "
+                    f"({format_tokens(int(peak_val), compact=True)})"
+                )
+                total_label = format_tokens(int(total_v))
+                title = "HEATMAP — TOKENS BY HOUR × WEEKDAY"
+                color_low, color_high = (30, 30, 60), (153, 153, 204)
         else:
             peak_label = "—"
+            total_label = "—"
+            title = "HEATMAP — BY HOUR × WEEKDAY"
+            color_low, color_high = (80, 30, 0), (255, 140, 0)
 
-        # Hour ticks every 3 hours so labels don't clobber each other
+        # Hour ticks every 3 hours so labels don't clobber each other.
         hour_ticks = [(h, f"{h:02d}") for h in range(24) if h % 3 == 0]
         heatmap = HeatmapGrid(
             grid,
             y_labels=DAY_NAMES,
             x_labels=hour_ticks,
-            color_low=(80, 30, 0),
-            color_high=(255, 140, 0),
+            color_low=color_low,
+            color_high=color_high,
         )
 
-        return self._chart_panel(
-            "SPEND HEATMAP — COST BY HOUR × DAY", heatmap,
-            f"Peak: {peak_label}  ◥  Total: {format_cost(total_cost)}",
+        subtitle = (
+            f"Peak: {peak_label}  ◥  "
+            f"Total: {total_label}  ◥  "
+            f"[dim]\\[m] → {next_m}[/]"
         )
+        return self._chart_panel(title, heatmap, subtitle)
 
     # ── Session cost histogram ──
 
@@ -1030,10 +1129,8 @@ class CostTrackerApp(App):
     # ── RECENT tab ──────────────────────────────────────────────────────
     #
     # OPS shows "today since midnight"; RECENT shows the rolling-12h window
-    # at 15-minute granularity. Three stacked bar charts (cost / requests /
-    # tokens) plus a stat row (1h / 6h / 12h totals) give a true "what just
-    # happened" lens that doesn't reset at midnight or wash out late at
-    # night.
+    # at 15-minute granularity. One bar chart (metric toggled with `m`) plus
+    # a stat row (1h / 6h / 12h totals) and ranking panels.
 
     def _build_recent(self) -> Widget:
         snap = self._snapshot
@@ -1042,33 +1139,51 @@ class CostTrackerApp(App):
         rv = snap.recent
         now = snap.clock.now
 
-        # X-axis labels — only label buckets that start exactly on the
-        # hour, regardless of which bucket index that lands on. Otherwise
-        # an out-of-phase window (e.g. 9:30 PM rounds end to 9:45) leaves
-        # ticks at :45 / :45 / :45 instead of :00 / :00 / :00. plotext
-        # treats empty-string slots as no-tick, so we render the full
-        # series and the axis stays clean.
+        # X-axis: label only on-the-hour buckets.
         bucket_labels = [
             t.strftime("%H:%M") if t.minute == 0 else ""
             for t in rv.bucket_starts
         ]
 
-        def draw_cost(plt):
-            plt.bar(bucket_labels, rv.cost_series, color=(255, 153, 0))
-            self._set_yticks(plt, rv.cost_series, format_cost)
+        metric = self._recent_metric
+        _cycle = {"cost": "requests", "requests": "tokens", "tokens": "cost"}
+        next_m = _cycle[metric]
 
-        def draw_reqs(plt):
-            plt.bar(bucket_labels, rv.request_series, color=(204, 102, 153))
-            self._set_yticks(
-                plt, [float(v) for v in rv.request_series],
-                lambda v: f"{int(v)}",
+        if metric == "cost":
+            def draw_fn(plt):
+                plt.bar(bucket_labels, rv.cost_series, color=(255, 153, 0))
+                self._set_yticks(plt, rv.cost_series, format_cost)
+            title = f"COST PER {RECENT_BUCKET_MIN}-MIN BUCKET ($)"
+            subtitle = (
+                f"12h: {format_cost(rv.cost_12h)}  ◥  "
+                f"peak: {format_cost(max(rv.cost_series, default=0))}  ◥  "
+                f"[dim]\\[m] → {next_m}[/]"
             )
-
-        def draw_tokens(plt):
-            plt.bar(bucket_labels, rv.token_series, color=(153, 153, 204))
-            self._set_yticks(
-                plt, [float(v) for v in rv.token_series],
-                lambda v: format_tokens(int(v), compact=True),
+        elif metric == "requests":
+            def draw_fn(plt):
+                plt.bar(bucket_labels, rv.request_series, color=(204, 102, 153))
+                self._set_yticks(
+                    plt, [float(v) for v in rv.request_series],
+                    lambda v: f"{int(v)}",
+                )
+            title = f"REQUESTS PER {RECENT_BUCKET_MIN}-MIN BUCKET"
+            subtitle = (
+                f"12h: {rv.requests_12h:,}  ◥  "
+                f"peak: {max(rv.request_series, default=0):,}  ◥  "
+                f"[dim]\\[m] → {next_m}[/]"
+            )
+        else:  # tokens
+            def draw_fn(plt):
+                plt.bar(bucket_labels, rv.token_series, color=(153, 153, 204))
+                self._set_yticks(
+                    plt, [float(v) for v in rv.token_series],
+                    lambda v: format_tokens(int(v), compact=True),
+                )
+            title = f"TOKENS PER {RECENT_BUCKET_MIN}-MIN BUCKET"
+            subtitle = (
+                f"12h: {format_tokens(rv.tokens_12h)}  ◥  "
+                f"peak: {format_tokens(max(rv.token_series, default=0))}  ◥  "
+                f"[dim]\\[m] → {next_m}[/]"
             )
 
         # Stat-band row: 1h / 6h / 12h, plus most-recent activity timestamp.
@@ -1088,18 +1203,18 @@ class CostTrackerApp(App):
             self._build_recent_stat(
                 "LAST 1h", "",
                 value=format_cost(rv.cost_1h),
-                detail=f"{rv.requests_1h:,} requests",
+                detail=f"{rv.requests_1h:,} req · {format_tokens(rv.tokens_1h)} tok",
             ),
             self._build_recent_stat(
                 "LAST 6h", "alt",
                 value=format_cost(rv.cost_6h),
-                detail=f"{rv.requests_6h:,} requests",
+                detail=f"{rv.requests_6h:,} req · {format_tokens(rv.tokens_6h)} tok",
             ),
             self._build_recent_stat(
                 "LAST 12h", "accent",
                 value=format_cost(rv.cost_12h),
-                detail=f"{rv.requests_12h:,} requests · "
-                       f"{format_tokens(rv.tokens_12h)} tokens",
+                detail=f"{rv.requests_12h:,} req · "
+                       f"{format_tokens(rv.tokens_12h)} tok",
             ),
             self._build_recent_stat(
                 "LATEST", "",
@@ -1120,30 +1235,10 @@ class CostTrackerApp(App):
             f"{RECENT_BUCKET_MIN}-min buckets"
         )
 
-        # Three stacked sub-charts.
-        cost_panel = self._make_chart(
-            f"COST PER {RECENT_BUCKET_MIN}-MIN BUCKET ($)",
-            draw_cost,
-            f"12h total: {format_cost(rv.cost_12h)}  ◥  "
-            f"peak: {format_cost(max(rv.cost_series, default=0))}",
-        )
-        req_panel = self._make_chart(
-            f"REQUESTS PER {RECENT_BUCKET_MIN}-MIN BUCKET",
-            draw_reqs,
-            f"12h total: {rv.requests_12h:,}  ◥  "
-            f"peak: {max(rv.request_series, default=0):,}",
-        )
-        tok_panel = self._make_chart(
-            f"TOKENS PER {RECENT_BUCKET_MIN}-MIN BUCKET",
-            draw_tokens,
-            f"12h total: {format_tokens(rv.tokens_12h)}  ◥  "
-            f"peak: {format_tokens(max(rv.token_series, default=0))}",
-        )
-
-        # Side-by-side ranking row: model mix + project mix in the window.
+        chart = self._make_chart(title, draw_fn, subtitle)
         ranking_panels = self._build_recent_ranking_panels(rv)
 
-        children: List[Widget] = [recent_summary, cost_panel, req_panel, tok_panel]
+        children: List[Widget] = [recent_summary, chart]
         if ranking_panels is not None:
             children.append(ranking_panels)
         return Vertical(*children, classes="chart-panel chart-stack")
@@ -1330,7 +1425,7 @@ class CostTrackerApp(App):
                 value_selector=lambda s: format_cost(ops(s).median_cost),
                 detail_selector=lambda s: (
                     f"P95 {format_cost(ops(s).p95_cost)} · "
-                    f"max {format_cost(ops(s).max_call_cost)}"
+                    f"med {format_tokens(ops(s).median_tokens)} tok"
                 ),
             ),
             classes="ops-stat-row",
@@ -1346,11 +1441,32 @@ class CostTrackerApp(App):
         session_panel.border_subtitle = "today"
         return session_panel
 
+    # Hourly-bar metric → (selector, subtitle_fn, title_suffix)
+    _HOURLY_METRICS = {
+        "cost":     (lambda s: s.ops.hour_cost,
+                     lambda s: f"cost/hr · today {format_cost(s.ops.today_cost)}",
+                     "COST ($)"),
+        "tokens":   (lambda s: s.ops.hour_tokens,
+                     lambda s: f"tokens/hr · today {format_tokens(int(sum(s.ops.hour_tokens)))}",
+                     "TOKENS"),
+        "requests": (lambda s: s.ops.hour_requests,
+                     lambda s: f"calls/hr · today {int(sum(s.ops.hour_requests)):,}",
+                     "REQUESTS"),
+    }
+
     def _build_hourly_wrap(self) -> Widget:
-        """24-cell hourly bar + tick axis, bound to snapshot."""
+        """24-cell hourly bar + tick axis, bound to snapshot.
+
+        `h` cycles the metric between cost, tokens, and requests.
+        """
+        metric = self._hourly_metric
+        selector, subtitle_fn, suffix = self._HOURLY_METRICS[metric]
+        other_cycle = {"cost": "tokens", "tokens": "requests", "requests": "cost"}
+        next_metric = other_cycle[metric]
+
         spark = LiveHourlyBar(
             self._metrics,
-            lambda s: s.ops.hour_cost,
+            selector,
             classes="ops-hourly-spark",
         )
         axis_cells: list[Widget] = []
@@ -1360,14 +1476,11 @@ class CostTrackerApp(App):
                 f"[dim]{lbl}[/]", classes="hourly-axis", markup=True,
             ))
         axis = Horizontal(*axis_cells, classes="ops-hourly-axis")
-        # LiveBorderSubtitle is display:none — it exists only to mutate
-        # `wrap.border_subtitle` when the snapshot changes. Constructing
-        # it requires a `wrap` reference, so we build it after.
         wrap = Vertical(spark, axis, classes="ops-hourly-wrap")
-        wrap.border_title = "◖ HOURLY ACTIVITY ◗"
+        wrap.border_title = f"◖ HOURLY ACTIVITY — {suffix} ◗"
         wrap.compose_add_child(LiveBorderSubtitle(
             self._metrics,
-            lambda s: f"cost per hour · today {format_cost(s.ops.today_cost)}",
+            lambda s: subtitle_fn(s) + f"  [dim]\\[h] → {next_metric}[/]",
             parent_widget=wrap,
         ))
         return wrap

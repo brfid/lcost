@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from llmcars.aggregation import aggregate_by_day, compute_date_window
-from llmcars.collectors import (
+from lcost.aggregation import aggregate_by_day, compute_date_window
+from lcost.collectors import (
     _extract_user_text,
     _project_from_session_path,
     parse_claude_code_session,
 )
-from llmcars.ledger import (
+from lcost.ledger import (
     file_needs_processing,
     ingest,
     load_ingest_state,
@@ -22,7 +22,7 @@ from llmcars.ledger import (
     save_ledger,
     update_file_state,
 )
-from llmcars.pricing import (
+from lcost.pricing import (
     HAIKU_PRICING,
     OPUS_PRICING,
     SONNET_PRICING,
@@ -490,8 +490,8 @@ class TestProjectFromSessionPath:
         session_file = slug_dir / "abc.jsonl"
         session_file.write_text("")
 
-        monkeypatch.setattr("llmcars.collectors.get_claude_code_dir", lambda: fake_cc)
-        monkeypatch.setattr("llmcars.collectors.Path.home", lambda: fake_home)
+        monkeypatch.setattr("lcost.collectors.get_claude_code_dir", lambda: fake_cc)
+        monkeypatch.setattr("lcost.collectors.Path.home", lambda: fake_home)
 
         result = _project_from_session_path(session_file)
         # Should resolve to the real target

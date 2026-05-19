@@ -1,4 +1,4 @@
-"""Textual widgets used by the llmcars OPS dashboard.
+"""Textual widgets used by the lcost OPS dashboard.
 
 These are generic, stateless presentation components. They know how to render
 themselves given data; they do not know about the ledger, aggregation, or the
@@ -318,6 +318,9 @@ class HelpScreen(ModalScreen):
 
 [b]CALENDAR[/b]
   [b]m        [/b] Toggle metric (cost ↔ requests)
+
+[b]OPS[/b]
+  [b]h        [/b] Cycle hourly bar (cost / tokens / requests)
 
 [b]General[/b]
   [b]r        [/b] Pause / resume auto-refresh

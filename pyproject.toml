@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "llmcars"
+name = "lcost"
 version = "0.2.0"
 description = "LLM API spend tracker for Claude Code and Cline (LCARS-style TUI)"
 readme = "README.md"
@@ -15,14 +15,14 @@ dependencies = [
 ]
 
 [project.scripts]
-llmcars = "llmcars.cli:main"
+lcost = "lcost.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["llmcars*"]
+include = ["lcost*"]
 
 [tool.setuptools.package-data]
-llmcars = ["*.tcss"]
+lcost = ["*.tcss"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

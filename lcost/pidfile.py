@@ -29,13 +29,13 @@ class AlreadyRunning(RuntimeError):
         self.path = path
         who = f"PID {pid}" if pid else "another process"
         super().__init__(
-            f"llmcars TUI is already running ({who}, lock at {path}). "
+            f"lcost TUI is already running ({who}, lock at {path}). "
             f"Use --force to override."
         )
 
 
 def default_pidfile_path() -> Path:
-    """Return the pidfile path under ``$XDG_CACHE_HOME/llmcars/``."""
+    """Return the pidfile path under ``$XDG_CACHE_HOME/lcost/``."""
     return cache_dir() / "tui.pid"
 
 

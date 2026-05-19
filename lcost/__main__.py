@@ -1,4 +1,4 @@
-from llmcars.cli import main
+from lcost.cli import main
 import sys
 
 sys.exit(main())

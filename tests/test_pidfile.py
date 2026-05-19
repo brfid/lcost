@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from llmcars.pidfile import (
+from lcost.pidfile import (
     AlreadyRunning,
     default_pidfile_path,
     single_instance,
@@ -34,7 +34,7 @@ from llmcars.pidfile import (
 _HOLDER_SRC = """
 import sys
 from pathlib import Path
-from llmcars.pidfile import single_instance
+from lcost.pidfile import single_instance
 
 path = Path(sys.argv[1])
 with single_instance(path=path):
@@ -154,7 +154,7 @@ def test_default_path_honors_xdg_cache_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
-    assert default_pidfile_path() == tmp_path / "llmcars" / "tui.pid"
+    assert default_pidfile_path() == tmp_path / "lcost" / "tui.pid"
 
 
 def test_default_path_falls_back_to_home_cache(
@@ -163,7 +163,7 @@ def test_default_path_falls_back_to_home_cache(
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     # Path.home() reads HOME on POSIX.
-    assert default_pidfile_path() == tmp_path / ".cache" / "llmcars" / "tui.pid"
+    assert default_pidfile_path() == tmp_path / ".cache" / "lcost" / "tui.pid"
 
 
 def test_creates_parent_directory(tmp_path: Path) -> None:
