@@ -849,7 +849,6 @@ class CostTrackerApp(App):
 
         active_days = sum(1 for v in by_date.values() if v > 0)
         total_v = sum(by_date.values())
-        max_v = max(by_date.values()) if by_date else 0
         peak_day = max(by_date, key=by_date.get) if by_date else None
         peak_v = by_date[peak_day] if peak_day else 0
 
@@ -860,6 +859,7 @@ class CostTrackerApp(App):
             x_labels=x_labels,
             color_low=color_low,
             color_high=color_high,
+            cell_height=4,
         )
 
         # Metric-toggle hint lives in the subtitle so users can discover
@@ -873,7 +873,37 @@ class CostTrackerApp(App):
             f"Peak: {fmt(peak_v)}  ◥  "
             f"[dim]\\[m] toggle to {other}[/]"
         )
-        return self._chart_panel(title, heatmap, subtitle)
+
+        # Daily bar chart for the same window — higher-resolution read of
+        # the same data. Sorted days within the grid window only.
+        grid_start_str = grid_start.strftime("%Y-%m-%d")
+        grid_end_str = grid_end.strftime("%Y-%m-%d")
+        sorted_days = sorted(
+            d for d in by_date if grid_start_str <= d <= grid_end_str
+        )
+        if sorted_days:
+            bar_values = [by_date.get(d, 0.0) for d in sorted_days]
+            bar_labels = [d[5:] for d in sorted_days]  # MM-DD
+
+            if self._calendar_metric == "cost":
+                bar_color = (255, 153, 0)
+                ytick_fmt = format_cost
+            else:
+                bar_color = (180, 180, 240)
+                ytick_fmt = lambda v: f"{int(v):,}"  # noqa: E731
+
+            def draw_bar(plt):
+                plt.bar(bar_labels, bar_values, color=bar_color)
+                self._set_yticks(plt, bar_values, ytick_fmt)
+
+            bar_chart = self._make_chart("DAILY DETAIL", draw_bar)
+        else:
+            bar_chart = None
+
+        heatmap_panel = self._chart_panel(title, heatmap, subtitle)
+        if bar_chart is not None:
+            return Vertical(heatmap_panel, bar_chart, classes="chart-panel chart-stack")
+        return heatmap_panel
 
     # ── HEATMAP tab (hour × weekday, metric toggle) ──────────────────────
     #
