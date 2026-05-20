@@ -69,7 +69,7 @@ TABS = [
     # Trends: daily time series
     "TREND",      # 4 — daily bars/lines · m cycles cost/tokens-io/tokens-cache/savings
     # Patterns: when do I work
-    "CALENDAR",   # 5 — 40-week heatmap · m cycles cost/requests
+    "CALENDAR",   # 5 — last-month heatmap · m cycles cost/requests
     "HEATMAP",    # 6 — hour×weekday · m cycles cost/requests/tokens
     # Distribution
     "CALLS",      # 7 — per-call cost histogram
@@ -797,17 +797,17 @@ class CostTrackerApp(App):
     # metric. Cost stays amber so the default look is unchanged; requests
     # render in periwinkle to match the rest of the app's "count" palette.
 
-    CALENDAR_WEEKS = 40
+    CALENDAR_WEEKS = 5
 
     # Metric → (title, color_low, color_high, value_formatter, peak_formatter)
     _CALENDAR_METRICS = {
         "cost": (
-            "CALENDAR HEATMAP — DAILY COST (40 weeks)",
+            "CALENDAR HEATMAP — DAILY COST (last month)",
             (60, 30, 0), (255, 153, 0),
             FIELD_COST, format_cost, "Total",
         ),
         "requests": (
-            "CALENDAR HEATMAP — DAILY REQUESTS (40 weeks)",
+            "CALENDAR HEATMAP — DAILY REQUESTS (last month)",
             (40, 30, 70), (180, 180, 240),
             FIELD_REQUESTS, lambda v: f"{int(v):,}", "Total",
         ),
