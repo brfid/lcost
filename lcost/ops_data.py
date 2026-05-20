@@ -280,7 +280,7 @@ def short_model(model: Optional[str]) -> str:
 
 
 def model_color(short: str) -> str:
-    """Return the LLMCARS hex color for a shortened model name's family.
+    """Return the hex color for a shortened model name's family.
 
     Accepts either a full short name (``gpt-5.5``) or a bare family key
     (``gpt-5``). Falls back to ``_UNKNOWN_MODEL_COLOR`` for unknown families.

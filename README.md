@@ -2,8 +2,6 @@
 
 Tracks LLM API spend across Claude Code and Cline. Reads session files written by each tool, deduplicates against a local ledger, and reports cost and token breakdowns across multiple providers (Anthropic, OpenAI, Amazon Bedrock, Google, Meta, Mistral).
 
-Styled after [LCARS](https://en.wikipedia.org/wiki/LCARS) — hence *LLMCARS*.
-
 ## Prerequisites
 
 - Python 3.9+
