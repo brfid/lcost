@@ -117,7 +117,7 @@ lcost --recalc --dry-run  # Preview changes without writing
 lcost --recalc            # Rewrite costs in the ledger
 ```
 
-Entries whose model family has no configured rates (see [Pricing](#pricing) below) are **skipped** — their stored cost is preserved. `--recalc` prints a `skipped` count alongside `changed`.
+Entries with no configured rates are skipped and their stored cost is preserved. `--recalc` prints a `skipped` count alongside `changed`.
 
 ### Other options
 
@@ -228,22 +228,8 @@ Pricing is per model family, keyed off a single `FAMILIES` registry in `lcost/pr
 | GPT-5 | 1.25 | 10.00 | 1.25 | 0.125 | [openai.com/pricing](https://openai.com/api/pricing) |
 | GPT-5 mini | 0.25 | 2.00 | 0.25 | 0.025 | [openai.com/pricing](https://openai.com/api/pricing) |
 | GPT-5 nano | 0.05 | 0.40 | 0.05 | 0.005 | [openai.com/pricing](https://openai.com/api/pricing) |
-| GPT-4 | — | — | — | — | Placeholder (rates unset) |
-| GPT (generic) | — | — | — | — | Placeholder |
-| Nova | — | — | — | — | Placeholder |
-| Gemini | — | — | — | — | Placeholder |
-| Llama | — | — | — | — | Placeholder |
-| Mistral | — | — | — | — | Placeholder |
 
-**Cost-source policy.** Three branches:
-
-1. **Exact model-ID hit** in `MODEL_PRICING` (e.g. `claude-sonnet-4-5-20250929`) — use those rates.
-2. **Family match with rates** — use the family's rates.
-3. **Family match, no rates** (placeholder) — `calculate_cost` returns `None`. Callers **must not** overwrite any existing cost. For Cline, the provider already reports a per-call cost inline (`api_req_started.cost`), so the ingested entry keeps that real value. For Claude Code entries on unpriced families, cost is left at whatever was first computed (typically 0).
-
-This matters: **`--recalc` never silently repriceses a GPT or Nova entry with Sonnet rates.** Add real rates to `FAMILIES` in `pricing.py` to enable recompute.
-
-Exact model IDs are matched first. Verify rates against each provider's pricing page if you suspect drift. Use `--recalc` to update stored costs after a rate change. AWS Bedrock may charge a small premium on top of the published direct-API rates; the tables above use direct-API numbers.
+Cline costs come from the provider's inline per-call data and are stored as-is. Claude Code costs are computed from the table above. Use `--recalc` to recompute stored costs after a rate change; entries with no configured rates are skipped. Verify rates against each provider's pricing page if you suspect drift.
 
 ### Data safety
 
