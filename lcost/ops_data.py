@@ -18,6 +18,7 @@ from .formatters import (
     FIELD_COST,
     FIELD_TOKENS_IN,
     FIELD_TOKENS_OUT,
+    format_number,
 )
 from .pricing import FAMILIES, FAMILIES_BY_KEY, family_for_model
 
@@ -335,7 +336,7 @@ def cost_bar(cost: float, max_cost: float, width: int = 8) -> str:
 
 def _escape_markup(s: str) -> str:
     """Escape `[` so user data can't inject Textual markup."""
-    return s.replace("[", chr(92) + "[")
+    return s.replace("[", "\\[")
 
 
 def _tool_chain(tools: List[str], limit: int = 6) -> str:
@@ -391,7 +392,7 @@ def row_activity_text(entry: Dict) -> str:
     cr = entry.get(FIELD_CACHE_READS, 0)
     cw = entry.get(FIELD_CACHE_WRITES, 0)
     if cr or cw:
-        bits.append(f"cache {_format_k(cr)}r/{_format_k(cw)}w")
+        bits.append(f"cache {format_number(cr)}r/{format_number(cw)}w")
     if entry.get("isSubagent"):
         bits.append("subagent turn")
     if bits:
@@ -401,15 +402,6 @@ def row_activity_text(entry: Dict) -> str:
     if sess:
         return f"[dim]· session {sess[:8]}[/]"
     return "[dim]· —[/]"
-
-
-def _format_k(num: int) -> str:
-    """Tiny helper: 12345 → 12K. Avoids pulling format_number into this module."""
-    if num >= 1_000_000:
-        return f"{num // 1_000_000}M"
-    if num >= 1_000:
-        return f"{num // 1_000}K"
-    return str(num)
 
 
 # ── Derived OPS view ──────────────────────────────────────────────────────

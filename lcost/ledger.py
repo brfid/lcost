@@ -2,9 +2,6 @@
 
 The ledger is the durable cost record. Per-run bookkeeping (file seek
 offsets, last-ingest timestamp) lives in `ingest_state.py`.
-
-Several names from `ingest_state` are re-exported here for backwards
-compatibility with callers that haven't migrated yet.
 """
 
 import contextlib
@@ -23,7 +20,7 @@ from .formatters import (
     FIELD_TOKENS_OUT,
     data_dir,
 )
-from .ingest_state import (  # noqa: F401 — re-exported for back-compat
+from .ingest_state import (
     file_needs_processing,
     get_ingest_state_path,
     get_stored_user_text,

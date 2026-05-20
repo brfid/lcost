@@ -75,20 +75,10 @@ APP_NAME = "lcost"
 LEGACY_APP_NAMES = ("claudit",)
 
 
-def _xdg_data_home() -> Path:
-    xdg = os.environ.get("XDG_DATA_HOME")
-    if xdg:
-        return Path(xdg)
-    return Path.home() / ".local" / "share"
-
-
-def data_dir(create: bool = True) -> Path:
-    """Return the on-disk data root for lcost.
-
-    If an old ``claudit`` data dir exists and the new one doesn't, migrate
-    it by renaming. Prints a single-line notice. Idempotent.
-    """
-    base = _xdg_data_home()
+def _xdg_dir(env_var: str, default: Path, label: str, create: bool) -> Path:
+    """Return an XDG-compliant app directory, migrating from legacy name if needed."""
+    xdg = os.environ.get(env_var)
+    base = Path(xdg) if xdg else default
     new_dir = base / APP_NAME
     if not new_dir.exists():
         for legacy in LEGACY_APP_NAMES:
@@ -96,34 +86,23 @@ def data_dir(create: bool = True) -> Path:
             if legacy_dir.exists():
                 try:
                     legacy_dir.rename(new_dir)
-                    print(f"Migrated data: {legacy_dir} → {new_dir}")
+                    print(f"Migrated {label}: {legacy_dir} → {new_dir}")
                     break
                 except OSError:
-                    # Cross-device or permission issue; leave both alone.
                     pass
     if create:
         new_dir.mkdir(parents=True, exist_ok=True)
     return new_dir
+
+
+def data_dir(create: bool = True) -> Path:
+    """Return the on-disk data root for lcost."""
+    return _xdg_dir("XDG_DATA_HOME", Path.home() / ".local" / "share", "data", create)
 
 
 def cache_dir(create: bool = True) -> Path:
     """Return the on-disk cache root for lcost (holds the TUI pidfile)."""
-    xdg = os.environ.get("XDG_CACHE_HOME")
-    base = Path(xdg) if xdg else Path.home() / ".cache"
-    new_dir = base / APP_NAME
-    if not new_dir.exists():
-        for legacy in LEGACY_APP_NAMES:
-            legacy_dir = base / legacy
-            if legacy_dir.exists():
-                try:
-                    legacy_dir.rename(new_dir)
-                    print(f"Migrated cache: {legacy_dir} → {new_dir}")
-                    break
-                except OSError:
-                    pass
-    if create:
-        new_dir.mkdir(parents=True, exist_ok=True)
-    return new_dir
+    return _xdg_dir("XDG_CACHE_HOME", Path.home() / ".cache", "cache", create)
 
 
 # ── Field-dict + formatting helpers ───────────────────────────────────────

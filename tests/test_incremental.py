@@ -26,7 +26,7 @@ from lcost.pricing import (
     HAIKU_PRICING,
     OPUS_PRICING,
     SONNET_PRICING,
-    _infer_pricing_by_family,
+    family_for_model,
     get_model_pricing,
 )
 
@@ -377,10 +377,10 @@ class TestModelPricing:
         assert get_model_pricing(None) is SONNET_PRICING
 
     def test_infer_by_family_direct(self):
-        assert _infer_pricing_by_family("anything-opus-inside") is OPUS_PRICING
-        assert _infer_pricing_by_family("foo-sonnet-bar") is SONNET_PRICING
-        assert _infer_pricing_by_family("haiku-x") is HAIKU_PRICING
-        assert _infer_pricing_by_family("gemini-pro") is None
+        assert family_for_model("anything-opus-inside").pricing is OPUS_PRICING
+        assert family_for_model("foo-sonnet-bar").pricing is SONNET_PRICING
+        assert family_for_model("haiku-x").pricing is HAIKU_PRICING
+        assert family_for_model("gemini-pro").pricing is None
 
 
 # ---------------------------------------------------------------------------
