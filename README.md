@@ -14,13 +14,7 @@ For the interactive dashboard:
 - [textual](https://pypi.org/project/textual/)
 - [textual-plotext](https://pypi.org/project/textual-plotext/)
 
-### Terminal compatibility
-
-The dashboard uses standard Unicode block elements (`█ ░ ▓ ▁▂▃▄▅▆▇`) that render correctly in most monospace fonts, including macOS Terminal.app's default Menlo. Line charts (DAILY, CACHE) use dot markers and look fine everywhere.
-
-**Known macOS Terminal.app artifact:** multi-row sparklines (OVERVIEW stat boxes) show a faint horizontal gap line through the middle of each bar. This is caused by Terminal.app's fixed inter-row line spacing, which inserts vertical padding between character rows that Textual cannot override. The bars are still readable; the gap is cosmetic. It does not appear in iTerm2 or other terminals with configurable line height.
-
-For the best experience — no gap lines, sharper chart lines, full glyph coverage — use iTerm2 (free) with any monospace font. macOS Terminal.app works without any configuration changes.
+Works best with a [Nerd Font](https://www.nerdfonts.com/) for full glyph coverage.
 
 ## Install
 
