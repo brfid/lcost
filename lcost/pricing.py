@@ -139,16 +139,6 @@ def has_priced_model(model: Optional[str]) -> bool:
     return get_model_pricing(model) is not None
 
 
-def _infer_pricing_by_family(model: Optional[str]) -> Optional[Dict[str, float]]:
-    """Compat shim: return family pricing (or None) without exact-ID lookup.
-
-    Historically a private helper; kept as a named symbol because a few
-    tests import it directly. Prefer ``family_for_model`` in new code.
-    """
-    fam = family_for_model(model)
-    return None if fam is None else fam.pricing
-
-
 def calculate_cost(tokens_in: int, tokens_out: int, cache_writes: int,
                    cache_reads: int, model: Optional[str] = None
                    ) -> Optional[float]:
