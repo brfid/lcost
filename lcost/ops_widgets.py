@@ -208,19 +208,22 @@ class HeatmapGrid(Vertical):
 
         for r, row in enumerate(self._grid):
             ylabel = self._y_labels[r] if r < len(self._y_labels) else ""
-            label_widget = Static(
-                f"[#9999CC]{ylabel}[/]",
-                classes="heatmap-y-label", markup=True,
-            )
-            cells: list[Widget] = [label_widget]
-            for v in row:
-                color = self._cell_color(v, max_val)
-                # Use solid block fill so the cell reads as a tile, not a glyph.
-                cells.append(Static(
-                    f"[{color}]████[/]",
-                    classes="heatmap-cell", markup=True,
-                ))
-            yield Horizontal(*cells, classes="heatmap-row")
+            for line in range(self._cell_height):
+                # Only the middle line of a tall cell gets the y-label.
+                mid = self._cell_height // 2
+                lbl = ylabel if line == mid else ""
+                label_widget = Static(
+                    f"[#9999CC]{lbl}[/]",
+                    classes="heatmap-y-label", markup=True,
+                )
+                cells: list[Widget] = [label_widget]
+                for v in row:
+                    color = self._cell_color(v, max_val)
+                    cells.append(Static(
+                        f"[{color}]████[/]",
+                        classes="heatmap-cell", markup=True,
+                    ))
+                yield Horizontal(*cells, classes="heatmap-row")
 
 
 # ── Hourly activity bar ───────────────────────────────────────────────────
