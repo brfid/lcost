@@ -460,6 +460,98 @@ class TestIngestBackfill:
         assert "stopReason" not in ledger["cc:1"]
         assert ledger["cc:1"]["model"] == "opus"
 
+    def test_cline_inflight_cost_healed_on_reparse(self):
+        """Cline entries frozen at cost=0 (in-flight capture) are updated when
+        a later full re-parse sees the completed values."""
+        # Simulate first ingest: api_req captured while call was in-flight
+        ledger = {
+            "cline:task1:1000": {
+                "source": "cline",
+                "cost": 0.0,
+                "tokensIn": 0,
+                "tokensOut": 0,
+                "cacheWrites": 0,
+                "cacheReads": 0,
+                "cacheSavings": 0.0,
+                "model": "claude-opus-4-8:1m",
+            }
+        }
+        # Second ingest: same entry with backfilled real values
+        healed = {
+            "cline:task1:1000": {
+                "source": "cline",
+                "cost": 1.93,
+                "tokensIn": 2,
+                "tokensOut": 3286,
+                "cacheWrites": 295750,
+                "cacheReads": 0,
+                "cacheSavings": 0.0,
+                "model": "claude-opus-4-8:1m",
+            }
+        }
+        added = ingest(ledger, healed)
+        assert added == 0  # not a new entry
+        entry = ledger["cline:task1:1000"]
+        assert entry["cost"] == 1.93
+        assert entry["tokensOut"] == 3286
+        assert entry["cacheWrites"] == 295750
+
+    def test_cline_nonzero_cost_not_overwritten(self):
+        """A Cline entry that already has a real cost is not overwritten."""
+        ledger = {
+            "cline:task1:1000": {
+                "source": "cline",
+                "cost": 2.50,
+                "tokensIn": 10,
+                "tokensOut": 500,
+                "cacheWrites": 0,
+                "cacheReads": 0,
+                "cacheSavings": 0.0,
+            }
+        }
+        ingest(ledger, {
+            "cline:task1:1000": {
+                "source": "cline",
+                "cost": 9.99,
+                "tokensIn": 99,
+                "tokensOut": 999,
+                "cacheWrites": 0,
+                "cacheReads": 0,
+                "cacheSavings": 0.0,
+            }
+        })
+        assert ledger["cline:task1:1000"]["cost"] == 2.50
+        assert ledger["cline:task1:1000"]["tokensOut"] == 500
+
+    def test_cc_cost_never_overwritten_by_upsert(self):
+        """CC entries are not subject to the Cline mutable-field upsert."""
+        ledger = {
+            "cc:msg1": {
+                "source": "cc",
+                "cost": 0.0,
+                "tokensIn": 0,
+                "tokensOut": 0,
+                "cacheWrites": 0,
+                "cacheReads": 0,
+                "cacheSavings": 0.0,
+            }
+        }
+        ingest(ledger, {
+            "cc:msg1": {
+                "source": "cc",
+                "cost": 5.00,
+                "tokensIn": 100,
+                "tokensOut": 200,
+                "cacheWrites": 0,
+                "cacheReads": 0,
+                "cacheSavings": 0.0,
+            }
+        })
+        # CC zero-cost entries are NOT healed — CC JSONL is append-only and
+        # a zero cost means the entry was genuinely zero at write time.
+        assert ledger["cc:msg1"]["cost"] == 0.0
+        assert ledger["cc:msg1"]["tokensOut"] == 0
+
 
 # ---------------------------------------------------------------------------
 # Project path resolution
