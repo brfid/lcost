@@ -85,12 +85,32 @@ def rotate_backup(ledger_path: Path, retain: int = BACKUP_RETAIN) -> Optional[Pa
     return dest
 
 
+# Fields that may be backfilled from a later re-parse of a Cline task file.
+# Cline writes api_req_started *before* the API call completes, then mutates
+# the same message in-place with final cost/token data. An incremental ingest
+# that ran while the call was in-flight will have stored zeros for these fields.
+# When a subsequent full re-parse sees the completed values, we allow them to
+# overwrite the stored zeros.
+_CLINE_MUTABLE_FIELDS = frozenset({
+    FIELD_COST, FIELD_CACHE_SAVINGS,
+    FIELD_TOKENS_IN, FIELD_TOKENS_OUT,
+    FIELD_CACHE_WRITES, FIELD_CACHE_READS,
+})
+
+
 def ingest(ledger: Dict[str, Dict], new_entries: Dict[str, Dict]) -> int:
     """Merge new entries into the ledger.
 
     For existing entries, fills in any keys that are missing — this covers
     schema evolution (e.g., ``model`` / ``project`` / ``promptPreview`` were
     added after some entries were first written).
+
+    Cline-specific upsert: ``_CLINE_MUTABLE_FIELDS`` (cost, tokens, cache
+    counts) are refreshed when the incoming value is nonzero and the stored
+    value is zero. This heals entries that were captured while an API call was
+    still in-flight — Cline backfills those fields in-place after the stream
+    completes, so a later full re-parse of the same file will have the real
+    numbers.
 
     Returns:
       Count of previously-unseen entries added.
@@ -102,9 +122,16 @@ def ingest(ledger: Dict[str, Dict], new_entries: Dict[str, Dict]) -> int:
             added += 1
         else:
             existing = ledger[entry_id]
+            is_cline = existing.get('source') == 'cline'
             for k, v in entry_data.items():
-                if k not in existing and v not in (None, ""):
-                    existing[k] = v
+                if k not in existing:
+                    if v not in (None, ""):
+                        existing[k] = v
+                elif is_cline and k in _CLINE_MUTABLE_FIELDS:
+                    # Overwrite a stored zero with a real value from a
+                    # completed (backfilled) Cline api_req message.
+                    if v and not existing[k]:
+                        existing[k] = v
     return added
 
 

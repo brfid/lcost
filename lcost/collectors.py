@@ -309,7 +309,21 @@ def _project_for_cline_task(messages: List[Dict]) -> str:
 
 def collect_cline_data(verbose: bool,
                        ingest_state: Optional[Dict] = None) -> Dict[str, Dict]:
-    """Collect cost entries from Cline task directories."""
+    """Collect cost entries from Cline task directories.
+
+    Unlike Claude Code (append-only JSONL), Cline's ``ui_messages.json`` is
+    mutated in-place: Cline writes an ``api_req_started`` message *before* the
+    API call completes, then backfills cost/token data into that same message
+    once the stream finishes. Byte-offset incremental parsing therefore misses
+    the backfilled values for any call that was in-flight during a previous
+    ingest run.
+
+    To avoid frozen-zero cost entries, Cline files are always re-parsed from
+    byte 0. The size gate (``file_needs_processing``) still skips files whose
+    size hasn't changed since the last run, so unchanged tasks are cheap.
+    The byte offset stored in ingest state is set to the file size (not a
+    mid-file position) so the size gate works correctly on the next run.
+    """
     cline_data_dir = get_cline_data_dir()
     if not cline_data_dir:
         if verbose:
@@ -334,6 +348,7 @@ def collect_cline_data(verbose: bool,
                 skipped += 1
                 continue
 
+        # Always parse from byte 0 — Cline files are mutable, not append-only.
         messages, success = parse_ui_messages(task_dir, verbose=verbose)
         if success:
             ok += 1
@@ -347,10 +362,12 @@ def collect_cline_data(verbose: bool,
         if ingest_state is not None and ui_file.exists():
             try:
                 stat = ui_file.stat()
+                # Store size as the byte_offset so the size gate fires
+                # correctly next run, but do NOT store a mid-file offset —
+                # Cline files must always be re-read from the beginning.
                 update_file_state(ingest_state, ui_file, stat.st_size)
             except OSError:
                 pass
-
 
     if verbose:
         print(f"Cline: parsed {ok}/{len(task_dirs)} tasks ({skipped} skipped), "
