@@ -133,23 +133,21 @@ Launch with `lcost` (the default mode).
 
 ### Tabs
 
-Number keys `1`–`9` switch tabs. The layout groups them by purpose:
+Number keys `1`–`7` switch tabs. The layout groups them by purpose:
 
 | Key | Tab | Contents |
 |---|---|---|
 | | **Live — what's happening now** | |
-| `1` | OVERVIEW | Six stat boxes with sparklines (today, this week, 30-day, tokens, cache, burn rate) |
-| `2` | RECENT | Rolling-12h window: cost / requests / tokens at 15-min granularity |
-| `3` | OPS | Today's session stats, project breakdown, model mix, call log |
+| `1` | OVERVIEW | Today vs a normal day — cost / tokens / requests with % deltas + per-model mix. `m` cycles the baseline (week / month / all-time) |
+| `2` | RECENT | Rolling-12h window: cost / requests / tokens at 15-min granularity. `m` cycles the metric |
+| `3` | OPS | Today's session stats, project breakdown, model mix, call log. `h` cycles the hourly-bar metric |
 | | **Trends — how am I trending over weeks** | |
-| `4` | DAILY | Daily cost line chart (60d) |
-| `5` | TOKENS | Two-panel: input/output (top), cache writes/reads (bottom) |
-| `6` | CACHE | Savings vs efficiency |
+| `4` | TREND | Daily time-series. `m` cycles cost / tokens I-O / cache tokens / savings |
 | | **Patterns — when do I work** | |
-| `7` | CALENDAR | 40-week heatmap; press `m` to toggle cost / requests |
-| `8` | COST MAP | Cost by hour × day-of-week (native cells) |
+| `5` | CALENDAR | Last-month heatmap + daily bar; `m` toggles cost / requests |
+| `6` | HEATMAP | Hour × weekday heatmap; `m` cycles cost / requests / tokens |
 | | **Distribution** | |
-| `9` | CALLS | Per-call cost distribution histogram |
+| `7` | CALLS | Per-call cost distribution histogram |
 
 ### OPS tab
 
@@ -178,8 +176,10 @@ New entries from auto-refresh are flagged with `★` and shown in bold. Subagent
 | `g` / `G` | Jump to top / bottom |
 | `]` / `[` | Next / previous tab |
 | `enter` | Expand most recent call (modal with full details) |
-| `1`–`9` | Switch tabs directly |
-| `m` | (CALENDAR) toggle metric: cost ↔ requests |
+| `ctrl+c` | Quit |
+| `1`–`7` | Switch tabs directly |
+| `m` | Cycle the active tab's metric/baseline (OVERVIEW, RECENT, TREND, CALENDAR, HEATMAP) |
+| `h` | (OPS) cycle hourly-bar metric: cost / tokens / requests |
 
 The status bar shows entry count, active days, refresh state, and a `+N new` badge when auto-refresh finds new entries.
 
