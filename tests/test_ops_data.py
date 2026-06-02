@@ -500,3 +500,100 @@ class TestDeriveRecentView:
         assert rv.requests_12h == 0
         assert rv.last_call_dt is None
         assert all(c == 0 for c in rv.cost_series)
+
+
+# ── derive_compare_view ───────────────────────────────────────────────────
+
+class TestDeriveCompareView:
+    """Today's totals vs week/month/all-time daily baselines."""
+
+    def _entry(self, dt, cost, tin, tout, model="claude-opus-4-7", source="cc"):
+        return (dt, f"id-{dt.isoformat()}-{cost}", {
+            "source": source, "ts": dt.isoformat(),
+            "cost": cost, "tokensIn": tin, "tokensOut": tout,
+            "model": model, "project": "/p", "isSubagent": False,
+        })
+
+    def _entries(self, now):
+        today = now.date()
+        return [
+            # Today: 2 calls, $3 total, 300 tokens
+            self._entry(now.replace(hour=10), 2.0, 100, 50),
+            self._entry(now.replace(hour=11), 1.0, 100, 50),
+            # 2 days ago (in week + month): 1 call, $1, 100 tokens
+            self._entry(now.replace(hour=9) - timedelta(days=2), 1.0, 60, 40),
+            # 5 days ago (in week + month): 1 call, $3, 200 tokens
+            self._entry(now.replace(hour=9) - timedelta(days=5), 3.0, 120, 80),
+            # 20 days ago (month only): 1 call, $5, 500 tokens
+            self._entry(now.replace(hour=9) - timedelta(days=20), 5.0, 300, 200),
+            # 100 days ago (all-time only): 1 call, $9, 90 tokens
+            self._entry(now.replace(hour=9) - timedelta(days=100), 9.0, 50, 40),
+            # agent_spawn — must be ignored
+            (now.replace(hour=8) - timedelta(days=2), "spawn", {
+                "source": "agent_spawn", "ts": "x",
+                "cost": 99.0, "tokensIn": 0, "tokensOut": 0,
+                "subagentType": "Explore",
+            }),
+        ]
+
+    def test_today_totals(self):
+        from lcost.ops_data import derive_compare_view, short_model
+        now = datetime(2026, 5, 13, 21, 30)
+        cv = derive_compare_view(self._entries(now), short_model, now=now)
+        assert cv.today_cost == pytest.approx(3.0)
+        assert cv.today_tokens == 300
+        assert cv.today_requests == 2
+
+    def test_week_baseline_excludes_today_and_old(self):
+        from lcost.ops_data import derive_compare_view, short_model
+        now = datetime(2026, 5, 13, 21, 30)
+        cv = derive_compare_view(self._entries(now), short_model, now=now)
+        wk = cv.windows["week"]
+        # Active days in window: the 2-days-ago and 5-days-ago days only
+        assert wk.active_days == 2
+        # Avg cost = ($1 + $3) / 2 active days
+        assert wk.avg_cost == pytest.approx(2.0)
+        assert wk.avg_tokens == (100 + 200) // 2
+
+    def test_month_baseline_includes_20d(self):
+        from lcost.ops_data import derive_compare_view, short_model
+        now = datetime(2026, 5, 13, 21, 30)
+        cv = derive_compare_view(self._entries(now), short_model, now=now)
+        mo = cv.windows["month"]
+        # 2d + 5d + 20d active days
+        assert mo.active_days == 3
+        assert mo.avg_cost == pytest.approx((1.0 + 3.0 + 5.0) / 3)
+
+    def test_all_baseline_includes_everything_but_today(self):
+        from lcost.ops_data import derive_compare_view, short_model
+        now = datetime(2026, 5, 13, 21, 30)
+        cv = derive_compare_view(self._entries(now), short_model, now=now)
+        al = cv.windows["all"]
+        assert al.active_days == 4
+        assert al.avg_cost == pytest.approx((1.0 + 3.0 + 5.0 + 9.0) / 4)
+
+    def test_agent_spawn_ignored(self):
+        from lcost.ops_data import derive_compare_view, short_model
+        now = datetime(2026, 5, 13, 21, 30)
+        cv = derive_compare_view(self._entries(now), short_model, now=now)
+        # The $99 spawn must not appear in any baseline
+        assert cv.windows["all"].avg_cost < 10
+
+    def test_model_avg_cost(self):
+        from lcost.ops_data import derive_compare_view, short_model
+        now = datetime(2026, 5, 13, 21, 30)
+        cv = derive_compare_view(self._entries(now), short_model, now=now)
+        # All sample entries are opus-4.7
+        assert "opus-4.7" in cv.today_model_cost
+        assert cv.windows["week"].model_avg_cost["opus-4.7"] == pytest.approx(2.0)
+
+    def test_empty_entries(self):
+        from lcost.ops_data import derive_compare_view, short_model
+        now = datetime(2026, 5, 13, 21, 30)
+        cv = derive_compare_view([], short_model, now=now)
+        assert cv.today_cost == 0
+        assert cv.today_requests == 0
+        for key in ("week", "month", "all"):
+            assert cv.windows[key].active_days == 0
+            assert cv.windows[key].avg_cost == 0
+

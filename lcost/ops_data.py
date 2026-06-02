@@ -702,3 +702,119 @@ def derive_recent_view(entries: List[Tuple], short_project_fn,
         project_cost_12h=dict(project_cost),
         last_call_dt=last_call_dt,
     )
+
+
+# ── Today-vs-average (COMPARE) view ───────────────────────────────────────
+#
+# "How does today stack up against a normal day?" Today's totals are easy;
+# the interesting part is the baseline — an *average active day* over a
+# chosen lookback window (week / month / all-time). Averaging over active
+# days (days with any billable entry) rather than calendar days keeps the
+# comparison fair: an idle weekend doesn't drag the baseline down.
+
+# (key, lookback_days). ``None`` lookback means all-time.
+COMPARE_WINDOWS: Tuple[Tuple[str, Optional[int]], ...] = (
+    ("week", 7),
+    ("month", 30),
+    ("all", None),
+)
+
+_COMPARE_LABELS = {"week": "7-day", "month": "30-day", "all": "all-time"}
+
+
+@dataclass(frozen=True)
+class CompareWindow:
+    """Baseline averages for one lookback window (excludes today)."""
+    key: str
+    label: str                       # human label, e.g. "7-day"
+    active_days: int                 # days with any billable entry
+    avg_cost: float                  # $ per active day
+    avg_tokens: int                  # in+out tokens per active day
+    avg_requests: float              # calls per active day
+    model_avg_cost: Dict[str, float]  # short_model → $ per active day
+
+
+@dataclass(frozen=True)
+class CompareView:
+    """Today's billable totals plus per-window baselines for comparison."""
+    today_cost: float
+    today_tokens: int                # in+out
+    today_requests: int
+    today_model_cost: Dict[str, float]
+    windows: Dict[str, CompareWindow]
+
+
+def derive_compare_view(entries: List[Tuple], short_model_fn,
+                        now: Optional[datetime] = None) -> CompareView:
+    """Compute today's totals and week/month/all-time daily baselines.
+
+    Single pass over ``entries``. Agent-spawn rows are skipped (no billable
+    cost, consistent with OPS/RECENT). Days strictly before today feed the
+    baselines; the window a day belongs to is decided by its age in days.
+    """
+    now = now or datetime.now()
+    today = now.date()
+
+    today_cost = 0.0
+    today_tokens = 0
+    today_requests = 0
+    today_model: Dict[str, float] = defaultdict(float)
+
+    acc = {
+        key: {
+            "cost": 0.0, "tokens": 0, "requests": 0,
+            "model": defaultdict(float), "days": set(),
+        }
+        for key, _ in COMPARE_WINDOWS
+    }
+
+    for dt, _, e in entries:
+        if e.get("source") == "agent_spawn":
+            continue
+        day = dt.date()
+        if day > today:
+            continue  # future-dated guard
+        cost = e.get(FIELD_COST, 0) or 0.0
+        tokens = (e.get(FIELD_TOKENS_IN, 0) or 0) + (e.get(FIELD_TOKENS_OUT, 0) or 0)
+        sm = short_model_fn(e.get("model"))
+
+        if day == today:
+            today_cost += cost
+            today_tokens += tokens
+            today_requests += 1
+            today_model[sm] += cost
+            continue
+
+        age = (today - day).days
+        for key, size in COMPARE_WINDOWS:
+            if size is None or age <= size:
+                a = acc[key]
+                a["cost"] += cost
+                a["tokens"] += tokens
+                a["requests"] += 1
+                a["model"][sm] += cost
+                a["days"].add(day)
+
+    windows: Dict[str, CompareWindow] = {}
+    for key, _ in COMPARE_WINDOWS:
+        a = acc[key]
+        n = len(a["days"])
+        denom = n if n > 0 else 1
+        windows[key] = CompareWindow(
+            key=key,
+            label=_COMPARE_LABELS[key],
+            active_days=n,
+            avg_cost=a["cost"] / denom,
+            avg_tokens=a["tokens"] // denom,
+            avg_requests=a["requests"] / denom,
+            model_avg_cost={m: c / denom for m, c in a["model"].items()},
+        )
+
+    return CompareView(
+        today_cost=today_cost,
+        today_tokens=today_tokens,
+        today_requests=today_requests,
+        today_model_cost=dict(today_model),
+        windows=windows,
+    )
+

@@ -34,15 +34,18 @@ from .formatters import (
     init_field_dict,
 )
 from .ops_data import (
+    CompareView,
     OpsView,
     RecentView,
     aggregate_today,
     collect_entries,
+    derive_compare_view,
     derive_ops_view,
     derive_recent_view,
     short_model,
     short_project,
 )
+
 
 
 # ── Clock bucket ──────────────────────────────────────────────────────────
@@ -197,9 +200,11 @@ class MetricsSnapshot:
     daily_signature: Tuple             # changes when `daily` changes
     ledger_signature: Tuple            # (len, source_filter)
     overview: OverviewMetrics
+    compare: CompareView               # today vs week/month/all-time baseline
     ops: OpsView
     recent: RecentView                 # rolling 12h window for RECENT tab
     ops_entries: List                  # raw entries for OPS call-log rendering
+
     daily: Dict[str, Dict] = field(default_factory=dict)
     source_filter: Optional[str] = None
 
@@ -236,13 +241,16 @@ def compute_snapshot(ledger: Dict, daily: Dict[str, Dict],
         entries, short_project, short_model, now=clock.now,
     )
     overview = _overview(daily, clock)
+    compare = derive_compare_view(entries, short_model, now=clock.now)
     return MetricsSnapshot(
         clock=clock,
         daily_signature=_daily_signature(daily),
         ledger_signature=(len(ledger), source_filter or ""),
         overview=overview,
+        compare=compare,
         ops=ops,
         recent=recent,
+
         ops_entries=entries,
         daily=daily,
         source_filter=source_filter,

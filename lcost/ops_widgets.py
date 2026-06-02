@@ -305,9 +305,9 @@ class HelpScreen(ModalScreen):
     _HELP_TEXT = """\
 [b]Navigation[/b]
   [b]] / [    [/b] Next / prev tab
-  [b]1–9      [/b] Jump direct: 1 OVERVIEW 2 RECENT 3 OPS
-              4 DAILY 5 TOKENS 6 CACHE
-              7 CALENDAR 8 COST MAP 9 CALLS
+  [b]1–7      [/b] Jump direct: 1 OVERVIEW 2 RECENT 3 OPS
+              4 TREND 5 CALENDAR 6 HEATMAP
+              7 CALLS
 
 [b]Scrolling[/b]
   [b]j / k    [/b] Down / up one row
@@ -319,6 +319,9 @@ class HelpScreen(ModalScreen):
   [b]enter    [/b] Open entry detail
   [b]esc / q  [/b] Close detail
 
+[b]OVERVIEW[/b]
+  [b]m        [/b] Cycle baseline (week / month / all-time)
+
 [b]CALENDAR[/b]
   [b]m        [/b] Toggle metric (cost ↔ requests)
 
@@ -328,7 +331,7 @@ class HelpScreen(ModalScreen):
 [b]General[/b]
   [b]r        [/b] Pause / resume auto-refresh
   [b]?        [/b] This help
-  [b]q        [/b] Quit
+  [b]q / ^C   [/b] Quit
 
 [dim]esc / q / ? to close[/dim]\
 """
