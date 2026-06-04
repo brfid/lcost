@@ -75,6 +75,10 @@ TABS = [
     "CALLS",      # 7 — per-call cost histogram
 ]
 
+# HUD is the default landing screen — not in TABS (no sidebar nav entry).
+# Number keys 1–7 drill into the corresponding tab; Escape/0 returns here.
+HUD = "HUD"
+
 
 # ── Helper: aggregate by hour-of-day × day-of-week ──
 
@@ -125,10 +129,13 @@ class CostTrackerApp(App):
         Binding("ctrl+c", "quit", "Quit", priority=True),
         Binding("r", "toggle_refresh", "Toggle refresh"),
         Binding("?", "show_help", "Help"),
+        # Return to HUD from any drill-down tab
+        Binding("escape", "go_hud", "HUD", show=False),
+        Binding("0", "go_hud", "HUD", show=False),
         # Tab navigation
         Binding("]", "tab_next", "Next tab", show=False),
         Binding("[", "tab_prev", "Prev tab", show=False),
-        # Row navigation (OPS) / scroll (other tabs)
+        # Row navigation (OPS/HUD log) / scroll (other tabs)
         Binding("j", "scroll_log(1)", "Scroll ↓", show=False),
         Binding("k", "scroll_log(-1)", "Scroll ↑", show=False),
         Binding("J", "scroll_log(10)", "Page ↓", show=False),
@@ -138,7 +145,7 @@ class CostTrackerApp(App):
         Binding("g", "jump_top", "Top", show=False),
         Binding("G", "jump_bottom", "Bottom", show=False),
         Binding("enter", "expand_selected", "Expand row", show=False),
-        # Number shortcuts. Layout matches the TABS list above:
+        # Number shortcuts. 0 = HUD; 1–7 = drill-down tabs.
         #   1 OVERVIEW    2 RECENT    3 OPS
         #   4 TREND       5 CALENDAR  6 HEATMAP   7 CALLS
         Binding("1", "tab('OVERVIEW')", "Overview", show=False),
@@ -167,7 +174,7 @@ class CostTrackerApp(App):
         self._ledger: Dict = {}
         self._daily: Dict = {}
         self._source_filter: Optional[str] = None
-        self._current_tab: str = "OVERVIEW"
+        self._current_tab: str = HUD
         self._auto_refresh: bool = True
         self._refresh_timer = None
         # Diff tracking for auto-refresh highlight: id → ticks-remaining
@@ -260,13 +267,10 @@ class CostTrackerApp(App):
 
         with Horizontal():
             with Vertical(id="sidebar"):
-                for i, tab_name in enumerate(TABS):
+                for tab_name in TABS:
                     slug = tab_name.lower().replace(" ", "-")
-                    lbl = Label(tab_name, id=f"nav-{slug}",
+                    yield Label(tab_name, id=f"nav-{slug}",
                                 classes="nav-button")
-                    if i == 0:
-                        lbl.add_class("active")
-                    yield lbl
 
             with VerticalScroll(id="main-content"):
                 yield Vertical(id="panel-container")
@@ -278,12 +282,14 @@ class CostTrackerApp(App):
 
     # Terminal height below this triggers compact sidebar (1-row nav buttons)
     COMPACT_SIDEBAR_ROWS = 45
+    # Terminal height below this collapses the HUD mid-tier (charts)
+    HUD_COMPACT_ROWS = 38
 
     def on_mount(self) -> None:
         snap = self._load_data()
         self._last_daily_sig = snap.daily_signature
         self._update_status_bar()
-        self._render_tab("OVERVIEW")
+        self._render_hud()
         self._refresh_timer = self.set_interval(
             self.REFRESH_INTERVAL, self._auto_refresh_tick
         )
@@ -291,6 +297,8 @@ class CostTrackerApp(App):
 
     def on_resize(self, event) -> None:
         self._apply_sidebar_density()
+        if self._current_tab == HUD:
+            self._apply_hud_density()
 
     def _apply_sidebar_density(self) -> None:
         try:
@@ -301,6 +309,17 @@ class CostTrackerApp(App):
             sidebar.add_class("compact")
         else:
             sidebar.remove_class("compact")
+
+    def _apply_hud_density(self) -> None:
+        """Toggle .hud-compact on the HUD container based on terminal height."""
+        try:
+            container = self.query_one("#panel-container", Vertical)
+        except Exception:
+            return
+        if self.size.height < self.HUD_COMPACT_ROWS:
+            container.add_class("hud-compact")
+        else:
+            container.remove_class("hud-compact")
 
     def _update_status_bar(self) -> None:
         entry_count = len(self._ledger)
@@ -334,15 +353,22 @@ class CostTrackerApp(App):
         snap = self._load_data()
         self._update_status_bar()
 
+        data_changed = snap.daily_signature != self._last_daily_sig
+        self._last_daily_sig = snap.daily_signature
+
+        # HUD: rebuild when data changes (chart + heatmap are static widgets,
+        # not reactive; KPI cells self-update via LiveLabel watchers).
+        if self._current_tab == HUD:
+            if data_changed:
+                self._render_hud()
+            return
+
         # Live tabs (OVERVIEW, OPS) self-update via reactive watchers.
         # Chart tabs need an explicit rebuild, but only when data changed —
         # minute rollovers alone shouldn't redraw plotext.
-        if (self._current_tab in self._CHART_TABS
-                and snap.daily_signature != self._last_daily_sig):
-            self._last_daily_sig = snap.daily_signature
+        if self._current_tab in self._CHART_TABS and data_changed:
             self._render_tab(self._current_tab)
-        else:
-            self._last_daily_sig = snap.daily_signature
+            return
 
         # OPS call-log rows aren't reactive (each row's markup depends on
         # per-row selected/new state). Refresh them in place when the row
@@ -355,10 +381,16 @@ class CostTrackerApp(App):
         self._update_status_bar()
 
     def action_tab_next(self) -> None:
+        if self._current_tab == HUD:
+            self.action_tab(TABS[0])
+            return
         idx = (TABS.index(self._current_tab) + 1) % len(TABS)
         self.action_tab(TABS[idx])
 
     def action_tab_prev(self) -> None:
+        if self._current_tab == HUD:
+            self.action_tab(TABS[-1])
+            return
         idx = (TABS.index(self._current_tab) - 1) % len(TABS)
         self.action_tab(TABS[idx])
 
@@ -432,9 +464,10 @@ class CostTrackerApp(App):
     def action_expand_selected(self) -> None:
         """Show modal with full prompt + metadata for the selected entry.
 
+        Works from OPS and HUD (both show the call log).
         If nothing is selected, default to the top-most (most recent) entry.
         """
-        if self._current_tab != "OPS" or not self._ops_entries_cache:
+        if self._current_tab not in ("OPS", HUD) or not self._ops_entries_cache:
             return
         idx = self._selected_row if self._selected_row >= 0 else 0
         idx = max(0, min(len(self._ops_entries_cache) - 1, idx))
@@ -481,6 +514,21 @@ class CostTrackerApp(App):
             w = getattr(w, "parent", None)
         if self._selected_row != -1:
             self._set_selected_row(-1)
+
+    def action_go_hud(self) -> None:
+        """Return to the HUD from any drill-down tab."""
+        self._render_hud()
+
+    def _render_hud(self) -> None:
+        """Render the dense HUD as the active view."""
+        self._current_tab = HUD
+        # Clear nav highlights — HUD has no sidebar entry
+        for lbl in self.query(".nav-button"):
+            lbl.remove_class("active")
+        container = self.query_one("#panel-container", Vertical)
+        container.remove_children()
+        container.mount(self._build_hud())
+        self._apply_hud_density()
 
     def action_tab(self, tab_name: str) -> None:
         self._activate_nav(tab_name)
@@ -601,6 +649,175 @@ class CostTrackerApp(App):
 
         plot.call_after_refresh(on_mount_chart)
         return self._chart_panel(title, plot, subtitle)
+
+    # ── HUD — dense single-screen view ──────────────────────────────────
+    #
+    # Layout (top → bottom):
+    #   1. KPI strip  — 6 compact live cells (no sparklines)
+    #   2. Mid tier   — trend chart (left) + hour×weekday heatmap (right)
+    #   3. Hourly bar — 24-cell cost bar for today
+    #   4. Ranking    — projects / models / stops side-by-side
+    #   5. Call log   — fills remaining height
+    #
+    # The mid tier is hidden when terminal height < HUD_COMPACT_ROWS.
+    # All live cells bind to the snapshot; the chart + heatmap rebuild
+    # only when daily_signature changes (same gate as the TREND tab).
+
+    def _build_hud_kpi_cell(self, label: str, accent: str,
+                             value_selector, detail_selector) -> Vertical:
+        """Compact 3-row KPI cell for the HUD strip — no sparkline."""
+        cls = "hud-kpi-cell"
+        if accent:
+            cls += f" hud-kpi-cell-{accent}"
+        return Vertical(
+            Label(f" [#9999CC]{label}[/]",
+                  classes="hud-kpi-label", markup=True),
+            LiveLabel(
+                self._metrics,
+                lambda s: f" [#FF9900]{value_selector(s)}[/]",
+                classes="hud-kpi-value",
+            ),
+            LiveLabel(
+                self._metrics,
+                lambda s: f" [dim]{detail_selector(s)}[/]",
+                classes="hud-kpi-detail",
+            ),
+            classes=cls,
+        )
+
+    def _build_hud(self) -> Widget:
+        """Dense HUD: KPI strip + charts + hourly + ranking + call log."""
+        snap = self._snapshot
+        m = lambda s: s.overview  # noqa: E731
+        ops = lambda s: s.ops     # noqa: E731
+        stats = lambda s: s.ops.stats  # noqa: E731
+
+        # ── 1. KPI strip ──
+        kpi_strip = Horizontal(
+            self._build_hud_kpi_cell(
+                "TODAY", "",
+                value_selector=lambda s: format_cost(m(s).today_cost),
+                detail_selector=lambda s: f"{m(s).today_requests:,} req",
+            ),
+            self._build_hud_kpi_cell(
+                "WEEK", "alt",
+                value_selector=lambda s: format_cost(m(s).this_week_cost),
+                detail_selector=lambda s: m(s).wow_detail,
+            ),
+            self._build_hud_kpi_cell(
+                "30-DAY", "accent",
+                value_selector=lambda s: format_cost(m(s).month_cost),
+                detail_selector=lambda s: f"{format_number(m(s).month_requests)} req",
+            ),
+            self._build_hud_kpi_cell(
+                "TOKENS 7d", "",
+                value_selector=lambda s: format_tokens(m(s).tokens_7d_total),
+                detail_selector=lambda s: (
+                    f"{format_tokens(m(s).tokens_7d_in)} in · "
+                    f"{format_tokens(m(s).tokens_7d_out)} out"
+                ),
+            ),
+            self._build_hud_kpi_cell(
+                "CACHE", "alt",
+                value_selector=lambda s: m(s).cache_eff_label,
+                detail_selector=lambda s: f"saved {format_cost(m(s).cache_savings_30d)} 30d",
+            ),
+            self._build_hud_kpi_cell(
+                "BURN", "accent",
+                value_selector=lambda s: f"{format_cost(m(s).burn_rate)}/day",
+                detail_selector=lambda s: (
+                    f"{format_cost(ops(s).today_cost)} today · "
+                    f"{format_cost(ops(s).rate_per_hr)}/hr"
+                ),
+            ),
+            id="hud-kpi-strip",
+        )
+
+        # ── 2. Mid tier: trend chart + hour×weekday heatmap ──
+        # Trend: always cost view in HUD (fixed, no m-toggle)
+        sorted_days = sorted(self._daily.keys())[-30:]
+        if sorted_days:
+            dates = list(range(len(sorted_days)))
+            costs = [self._daily[d][FIELD_COST] for d in sorted_days]
+            total_cost = sum(costs)
+
+            def draw_trend(plt):
+                plt.plot(dates, costs, marker="dot", color=(255, 153, 0))
+                self._set_date_xticks(plt, sorted_days, dates, max_ticks=6)
+                self._set_yticks(plt, costs, format_cost)
+
+            trend_subtitle = (
+                f"{sorted_days[0][5:]} → {sorted_days[-1][5:]}  ◥  "
+                f"Total: {format_cost(total_cost)}  ◥  "
+                f"[dim]\\[4] full trend[/]"
+            )
+            trend_plot = PlotextPlot()
+
+            def on_mount_trend():
+                plt = self._init_plt(trend_plot)
+                draw_trend(plt)
+                trend_plot.refresh()
+
+            trend_plot.call_after_refresh(on_mount_trend)
+            trend_widget = Vertical(
+                Label("  DAILY COST — 30d", classes="chart-title"),
+                Label(f"  {trend_subtitle}", classes="chart-subtitle"),
+                trend_plot,
+                classes="chart-panel",
+                id="hud-trend",
+            )
+        else:
+            trend_widget = Vertical(
+                Label("  No data", classes="chart-title"),
+                classes="chart-panel",
+                id="hud-trend",
+            )
+
+        # Heatmap: cost by hour × weekday (all-time, fixed)
+        hm_grid = [[0.0] * 24 for _ in range(7)]
+        for dt, entry in _iter_individual_entries(self._ledger, self._source_filter):
+            hm_grid[dt.weekday()][dt.hour] += entry.get(FIELD_COST, 0)
+        hour_ticks = [(h, f"{h:02d}") for h in range(24) if h % 6 == 0]
+        heatmap_widget = HeatmapGrid(
+            hm_grid,
+            y_labels=DAY_NAMES,
+            x_labels=hour_ticks,
+            color_low=(80, 30, 0),
+            color_high=(255, 140, 0),
+        )
+        heatmap_panel = Vertical(
+            Label("  COST BY HOUR × WEEKDAY", classes="chart-title"),
+            Label("  [dim]\\[6] full heatmap[/]", classes="chart-subtitle",
+                  markup=True),
+            heatmap_widget,
+            classes="chart-panel",
+            id="hud-heatmap",
+        )
+
+        mid_tier = Horizontal(trend_widget, heatmap_panel, id="hud-mid")
+
+        # ── 3. Hourly bar ──
+        hourly_wrap = self._build_hourly_wrap()
+        hourly_wrap.id = "hud-hourly"
+
+        # ── 4. Ranking panels (today's projects + models + stops) ──
+        ranking_row: Optional[Widget] = None
+        if snap is not None:
+            ranking_row = self._build_ranking_panels(snap.ops)
+        if ranking_row is not None:
+            ranking_row.id = "hud-ranking"
+
+        # ── 5. Call log ──
+        entries = snap.ops_entries if snap else []
+        log_panel = self._build_log_panel(entries)
+        log_panel.id = "hud-log"
+
+        children: list[Widget] = [kpi_strip, mid_tier, hourly_wrap]
+        if ranking_row is not None:
+            children.append(ranking_row)
+        children.append(log_panel)
+
+        return Vertical(*children, classes="chart-panel chart-stack")
 
     # ── Overview tab ──
 
