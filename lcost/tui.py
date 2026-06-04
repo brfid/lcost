@@ -10,7 +10,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import Click
 from textual.widget import Widget
-from textual.widgets import Button, Label, Static
+from textual.widgets import Label, Static
 
 from textual_plotext import PlotextPlot
 
@@ -262,11 +262,11 @@ class CostTrackerApp(App):
             with Vertical(id="sidebar"):
                 for i, tab_name in enumerate(TABS):
                     slug = tab_name.lower().replace(" ", "-")
-                    btn = Button(tab_name, id=f"nav-{slug}",
-                                 classes="nav-button")
+                    lbl = Label(tab_name, id=f"nav-{slug}",
+                                classes="nav-button")
                     if i == 0:
-                        btn.add_class("active")
-                    yield btn
+                        lbl.add_class("active")
+                    yield lbl
 
             with VerticalScroll(id="main-content"):
                 yield Vertical(id="panel-container")
@@ -447,12 +447,33 @@ class CostTrackerApp(App):
             return
         self._set_selected_row(message.row_index)
 
+    @staticmethod
+    def _tab_slug(tab_name: str) -> str:
+        return tab_name.lower().replace(" ", "-")
+
+    def _activate_nav(self, tab_name: str) -> None:
+        for lbl in self.query(".nav-button"):
+            lbl.remove_class("active")
+        self.query_one(f"#nav-{self._tab_slug(tab_name)}", Label).add_class("active")
+
+    _SLUG_TO_TAB = {t.lower().replace(" ", "-"): t for t in TABS}
+
     def on_click(self, event: Click) -> None:
-        """Click outside a log row clears selection on OPS tab."""
+        """Handle nav label clicks; also clears OPS log selection on off-row clicks."""
+        widget = getattr(event, "widget", None)
+
+        # Nav label click
+        lbl_id = getattr(widget, "id", "") or ""
+        if lbl_id.startswith("nav-"):
+            slug = lbl_id[4:]
+            tab_name = self._SLUG_TO_TAB.get(slug, slug.upper())
+            self._activate_nav(tab_name)
+            self._render_tab(tab_name)
+            return
+
+        # OPS: click outside a log row clears selection
         if self._current_tab != "OPS":
             return
-        widget = getattr(event, "widget", None)
-        # Walk up from clicked widget looking for a LogRow ancestor
         w = widget
         while w is not None:
             if isinstance(w, LogRow):
@@ -460,25 +481,6 @@ class CostTrackerApp(App):
             w = getattr(w, "parent", None)
         if self._selected_row != -1:
             self._set_selected_row(-1)
-
-    @staticmethod
-    def _tab_slug(tab_name: str) -> str:
-        return tab_name.lower().replace(" ", "-")
-
-    def _activate_nav(self, tab_name: str) -> None:
-        for btn in self.query(".nav-button"):
-            btn.remove_class("active")
-        self.query_one(f"#nav-{self._tab_slug(tab_name)}", Button).add_class("active")
-
-    _SLUG_TO_TAB = {t.lower().replace(" ", "-"): t for t in TABS}
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        btn_id = event.button.id or ""
-        if btn_id.startswith("nav-"):
-            slug = btn_id[4:]
-            tab_name = self._SLUG_TO_TAB.get(slug, slug.upper())
-            self._activate_nav(tab_name)
-            self._render_tab(tab_name)
 
     def action_tab(self, tab_name: str) -> None:
         self._activate_nav(tab_name)
