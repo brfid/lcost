@@ -474,7 +474,8 @@ Sparkline > .sparkline--min-color {
 }
 
 .ops-panel-log {
-    height: auto;
+    height: 1fr;
+    min-height: 8;
 }
 
 /* Fill remaining vertical space — used by CALLS bucket panel so it
