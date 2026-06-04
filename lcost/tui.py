@@ -152,6 +152,7 @@ class CostTrackerApp(App):
         # RECENT: cost/requests/tokens  TREND: cost/tokens-io/tokens-cache/savings
         # CALENDAR: cost/requests       HEATMAP: cost/requests/tokens
         Binding("m", "toggle_metric", "Toggle metric", show=False),
+        Binding("b", "toggle_baseline", "Toggle baseline", show=False),
         # OPS-only hourly-bar metric toggle (cost / tokens / requests)
         Binding("h", "toggle_hourly_metric", "Toggle hourly metric",
                 show=False),
@@ -190,6 +191,8 @@ class CostTrackerApp(App):
         self._hourly_metric: str = "cost"
         # OVERVIEW baseline window cycles: "week" → "month" → "all"
         self._overview_baseline: str = "week"
+        # OVERVIEW metric toggle: "cost" ↔ "tokens"
+        self._overview_metric: str = "cost"
 
         # Reactive snapshot carrier — mounted in compose(); every live
         # widget subscribes to its `snapshot` attribute.
@@ -512,6 +515,17 @@ class CostTrackerApp(App):
         self._hourly_metric = cycle[self._hourly_metric]
         self._render_tab("OPS")
 
+    def action_toggle_baseline(self) -> None:
+        """Cycle OVERVIEW baseline window (week → month → all).
+
+        No-op outside OVERVIEW.
+        """
+        if self._current_tab != "OVERVIEW":
+            return
+        cycle = {"week": "month", "month": "all", "all": "week"}
+        self._overview_baseline = cycle[self._overview_baseline]
+        self._render_tab("OVERVIEW")
+
     def action_toggle_metric(self) -> None:
         """Unified m-key metric toggle — dispatches by current tab.
 
@@ -519,13 +533,14 @@ class CostTrackerApp(App):
         TREND:    cost → tokens_io → tokens_cache → savings → cost
         CALENDAR: cost ↔ requests
         HEATMAP:  cost → requests → tokens → cost
-        OVERVIEW: week → month → all baseline
+        OVERVIEW: cost ↔ tokens (MODEL MIX + BASELINE box)
         No-op on tabs without a metric toggle.
         """
         tab = self._current_tab
         if tab == "OVERVIEW":
-            cycle = {"week": "month", "month": "all", "all": "week"}
-            self._overview_baseline = cycle[self._overview_baseline]
+            self._overview_metric = (
+                "tokens" if self._overview_metric == "cost" else "cost"
+            )
             self._render_tab("OVERVIEW")
         elif tab == "RECENT":
             cycle = {"cost": "requests", "requests": "tokens", "tokens": "cost"}
@@ -635,12 +650,14 @@ class CostTrackerApp(App):
 
         Values bind to the snapshot so minute/new-entry ticks refresh in
         place; the baseline window is read from `self._overview_baseline`,
-        captured per build (the `m` toggle rebuilds the tab).
+        captured per build. `m` toggles cost/tokens; `b` cycles the window.
         """
         baseline = self._overview_baseline
+        metric = self._overview_metric
         c = lambda snap: snap.compare  # noqa: E731
         win = lambda snap: c(snap).windows[baseline]  # noqa: E731
-        _next = {"week": "month", "month": "all", "all": "week"}[baseline]
+        _next_baseline = {"week": "month", "month": "all", "all": "week"}[baseline]
+        _next_metric = "tokens" if metric == "cost" else "cost"
 
         def cost_detail(s):
             w = win(s)
@@ -659,7 +676,18 @@ class CostTrackerApp(App):
 
         def baseline_detail(s):
             w = win(s)
-            return f"{w.active_days} active days  ·  \\[m] → {_next}"
+            return (f"{w.active_days} active days  ·  "
+                    f"\\[m] → {_next_metric}  ·  \\[b] → {_next_baseline}")
+
+        # BASELINE box switches between cost/day and tokens/day with metric.
+        if metric == "cost":
+            baseline_value_sel = lambda s: f"{format_cost(win(s).avg_cost)}/day"  # noqa: E731
+            baseline_spark_sel = lambda s: s.overview.spark_30d_cost  # noqa: E731
+            baseline_spark_lbl = "30d daily ▸"
+        else:
+            baseline_value_sel = lambda s: f"{format_tokens(win(s).avg_tokens)}/day"  # noqa: E731
+            baseline_spark_sel = lambda s: s.overview.spark_7d_tokens  # noqa: E731
+            baseline_spark_lbl = "7d tokens ▸"
 
         stats_row = Horizontal(
             LiveStatBox(
@@ -685,10 +713,10 @@ class CostTrackerApp(App):
             ),
             LiveStatBox(
                 self._metrics, f"BASELINE · {baseline.upper()}",
-                value_selector=lambda s: f"{format_cost(win(s).avg_cost)}/day",
+                value_selector=baseline_value_sel,
                 detail_selector=baseline_detail,
-                spark_selector=lambda s: s.overview.spark_30d_cost,
-                spark_label="30d daily ▸", classes="stat-box",
+                spark_selector=baseline_spark_sel,
+                spark_label=baseline_spark_lbl, classes="stat-box",
             ),
             id="overview-panel",
         )
@@ -696,43 +724,51 @@ class CostTrackerApp(App):
         snap = self._snapshot
         children: List[Widget] = [Vertical(stats_row, classes="chart-panel")]
         if snap is not None:
-            mix = self._build_overview_model_mix(snap, baseline)
+            mix = self._build_overview_model_mix(snap, baseline, metric)
             if mix is not None:
                 children.append(mix)
         return Vertical(*children, classes="chart-panel chart-stack")
 
-    def _build_overview_model_mix(self, snap, baseline: str) -> Optional[Widget]:
-        """Per-model panel: today's cost vs the baseline daily average.
+    def _build_overview_model_mix(self, snap, baseline: str,
+                                  metric: str) -> Optional[Widget]:
+        """Per-model panel: today vs baseline daily average.
 
-        Bar fraction is today/baseline-avg (capped at 1.0) so a full bar
-        means today already matches or exceeds a normal day for that model.
-        Models are unioned across today + baseline so a model that ran today
-        but not in-window (or vice versa) still shows.
+        `metric` controls whether cost or tokens are shown. Bar fraction is
+        today/baseline-avg (capped at 1.0) — a full bar means today already
+        matches or exceeds a normal day for that model.
         """
         cmp = snap.compare
         win = cmp.windows.get(baseline)
         if win is None:
             return None
-        today_m = cmp.today_model_cost
-        avg_m = win.model_avg_cost
+
+        if metric == "tokens":
+            today_m = cmp.today_model_tokens
+            avg_m = win.model_avg_tokens
+            fmt_val = lambda v: format_tokens(int(v))  # noqa: E731
+        else:
+            today_m = cmp.today_model_cost
+            avg_m = win.model_avg_cost
+            fmt_val = format_cost  # noqa: E731
+
         models = set(today_m) | set(avg_m)
         models.discard("—")
         if not models:
             return None
 
-        ranked = sorted(models, key=lambda mm: today_m.get(mm, 0.0), reverse=True)
+        ranked = sorted(models, key=lambda mm: today_m.get(mm, 0), reverse=True)
         rows: list[Widget] = []
         for mm in ranked[:TOP_N_PANEL]:
-            t = today_m.get(mm, 0.0)
-            a = avg_m.get(mm, 0.0)
+            t = today_m.get(mm, 0)
+            a = avg_m.get(mm, 0)
             frac = min(t / a, 1.0) if a > 0 else (1.0 if t > 0 else 0.0)
-            delta = self._delta_label(t, a)
-            label = f"{mm}"
-            value = f"{format_cost(t)} {delta}"
-            rows.append(self._panel_row(label, value, frac, model_color(mm)))
+            delta = self._delta_label(float(t), float(a))
+            value = f"{fmt_val(t)} {delta}"
+            rows.append(self._panel_row(mm, value, frac, model_color(mm)))
 
+        metric_label = "COST ($)" if metric == "cost" else "TOKENS"
         return self._ranked_panel(
-            f"MODEL MIX — TODAY vs {win.label} AVG",
+            f"MODEL MIX — TODAY vs {win.label} AVG  [{metric_label}]",
             f"bar = today ÷ avg · {win.active_days} active days",
             rows,
         )
