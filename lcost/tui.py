@@ -188,8 +188,6 @@ class CostTrackerApp(App):
         self._heatmap_metric: str = "cost"
         # OPS hourly bar cycles: "cost" → "tokens" → "requests"
         self._hourly_metric: str = "cost"
-        # OVERVIEW baseline window cycles: "week" → "month" → "all"
-        self._overview_baseline: str = "week"
 
         # Reactive snapshot carrier — mounted in compose(); every live
         # widget subscribes to its `snapshot` attribute.
@@ -519,15 +517,10 @@ class CostTrackerApp(App):
         TREND:    cost → tokens_io → tokens_cache → savings → cost
         CALENDAR: cost ↔ requests
         HEATMAP:  cost → requests → tokens → cost
-        OVERVIEW: week → month → all baseline
         No-op on tabs without a metric toggle.
         """
         tab = self._current_tab
-        if tab == "OVERVIEW":
-            cycle = {"week": "month", "month": "all", "all": "week"}
-            self._overview_baseline = cycle[self._overview_baseline]
-            self._render_tab("OVERVIEW")
-        elif tab == "RECENT":
+        if tab == "RECENT":
             cycle = {"cost": "requests", "requests": "tokens", "tokens": "cost"}
             self._recent_metric = cycle[self._recent_metric]
             self._render_tab("RECENT")
@@ -607,135 +600,67 @@ class CostTrackerApp(App):
         plot.call_after_refresh(on_mount_chart)
         return self._chart_panel(title, plot, subtitle)
 
-    # ── Overview tab — TODAY vs average ──────────────────────────────────
-    #
-    # Answers "how does today compare to a normal day?" `m` cycles the
-    # baseline window (week → month → all-time). Each window's baseline is
-    # the average over its *active* days (days with any billable entry), so
-    # idle days don't drag the comparison down. Stat cells stay live (bound
-    # to the snapshot); the baseline key is closed over at build time, so
-    # the m-toggle rebuilds the tab while ticks update values in place.
-
-    @staticmethod
-    def _delta_label(today: float, avg: float) -> str:
-        """'↑ 42% vs 7-day avg $1.23' style delta, color-coded.
-
-        Over-baseline reads amber (spending up), under reads periwinkle.
-        Returns just the arrow+pct fragment; caller appends the avg.
-        """
-        if avg <= 0:
-            return "[dim]no baseline[/]"
-        pct = (today - avg) / avg * 100
-        if pct >= 0:
-            return f"[#FF9900]↑ {pct:.0f}%[/]"
-        return f"[#9999CC]↓ {abs(pct):.0f}%[/]"
+    # ── Overview tab ──
 
     def _build_overview(self) -> Widget:
-        """TODAY-vs-baseline stat row + per-model comparison panel.
+        """OVERVIEW stats row — every value binds to the snapshot.
 
-        Values bind to the snapshot so minute/new-entry ticks refresh in
-        place; the baseline window is read from `self._overview_baseline`,
-        captured per build (the `m` toggle rebuilds the tab).
+        Minute ticks and new-entry ticks both produce a new snapshot; the
+        LiveStatBox children re-render in place.
         """
-        baseline = self._overview_baseline
-        c = lambda snap: snap.compare  # noqa: E731
-        win = lambda snap: c(snap).windows[baseline]  # noqa: E731
-        _next = {"week": "month", "month": "all", "all": "week"}[baseline]
-
-        def cost_detail(s):
-            w = win(s)
-            return (f"{self._delta_label(c(s).today_cost, w.avg_cost)} "
-                    f"vs {w.label} avg {format_cost(w.avg_cost)}")
-
-        def tokens_detail(s):
-            w = win(s)
-            return (f"{self._delta_label(c(s).today_tokens, w.avg_tokens)} "
-                    f"vs {w.label} avg {format_tokens(int(w.avg_tokens))}")
-
-        def requests_detail(s):
-            w = win(s)
-            return (f"{self._delta_label(c(s).today_requests, w.avg_requests)} "
-                    f"vs {w.label} avg {w.avg_requests:.0f}")
-
-        def baseline_detail(s):
-            w = win(s)
-            return f"{w.active_days} active days  ·  \\[m] → {_next}"
+        m = lambda snap: snap.overview  # noqa: E731
 
         stats_row = Horizontal(
             LiveStatBox(
-                self._metrics, "TODAY · COST",
-                value_selector=lambda s: format_cost(c(s).today_cost),
-                detail_selector=cost_detail,
-                spark_selector=lambda s: s.overview.spark_7d_cost,
+                self._metrics, "TODAY",
+                value_selector=lambda s: format_cost(m(s).today_cost),
+                detail_selector=lambda s: f"{m(s).today_requests:,} requests",
+                spark_selector=lambda s: m(s).spark_7d_cost,
                 spark_label="7d cost ▸", classes="stat-box",
             ),
             LiveStatBox(
-                self._metrics, "TODAY · TOKENS",
-                value_selector=lambda s: format_tokens(c(s).today_tokens),
-                detail_selector=tokens_detail,
-                spark_selector=lambda s: s.overview.spark_7d_tokens,
+                self._metrics, "THIS WEEK",
+                value_selector=lambda s: format_cost(m(s).this_week_cost),
+                detail_selector=lambda s: m(s).wow_detail,
+                spark_selector=lambda s: m(s).spark_4w,
+                spark_label="4wk weekly ▸", classes="stat-box",
+            ),
+            LiveStatBox(
+                self._metrics, "30-DAY",
+                value_selector=lambda s: format_cost(m(s).month_cost),
+                detail_selector=lambda s: f"{format_number(m(s).month_requests)} requests",
+                spark_selector=lambda s: m(s).spark_30d_cost,
+                spark_label="30d daily ▸", classes="stat-box",
+            ),
+            LiveStatBox(
+                self._metrics, "TOKENS (7d)",
+                value_selector=lambda s: format_tokens(m(s).tokens_7d_total),
+                detail_selector=lambda s: (
+                    f"{format_cost(m(s).cost_per_1k_out_7d)}/1K out · "
+                    f"{format_tokens(m(s).tokens_7d_in)} in / "
+                    f"{format_tokens(m(s).tokens_7d_out)} out"
+                ),
+                spark_selector=lambda s: m(s).spark_7d_tokens,
                 spark_label="7d tokens ▸", classes="stat-box",
             ),
             LiveStatBox(
-                self._metrics, "TODAY · REQUESTS",
-                value_selector=lambda s: f"{c(s).today_requests:,}",
-                detail_selector=requests_detail,
-                spark_selector=lambda s: s.overview.spark_burn,
-                spark_label="30d burn ▸", classes="stat-box",
+                self._metrics, "CACHE HIT",
+                value_selector=lambda s: format_cost(m(s).cache_savings_30d),
+                detail_selector=lambda s: m(s).cache_eff_label,
+                spark_selector=lambda s: m(s).spark_7d_cache,
+                spark_label="7d efficiency ▸", classes="stat-box",
             ),
             LiveStatBox(
-                self._metrics, f"BASELINE · {baseline.upper()}",
-                value_selector=lambda s: f"{format_cost(win(s).avg_cost)}/day",
-                detail_selector=baseline_detail,
-                spark_selector=lambda s: s.overview.spark_30d_cost,
-                spark_label="30d daily ▸", classes="stat-box",
+                self._metrics, "BURN RATE",
+                value_selector=lambda s: f"{format_cost(m(s).burn_rate)}/day",
+                detail_selector=lambda s: "7-day rolling avg",
+                spark_selector=lambda s: m(s).spark_burn,
+                spark_label="30d avg ▸", classes="stat-box",
             ),
             id="overview-panel",
         )
 
-        snap = self._snapshot
-        children: List[Widget] = [Vertical(stats_row, classes="chart-panel")]
-        if snap is not None:
-            mix = self._build_overview_model_mix(snap, baseline)
-            if mix is not None:
-                children.append(mix)
-        return Vertical(*children, classes="chart-panel chart-stack")
-
-    def _build_overview_model_mix(self, snap, baseline: str) -> Optional[Widget]:
-        """Per-model panel: today's cost vs the baseline daily average.
-
-        Bar fraction is today/baseline-avg (capped at 1.0) so a full bar
-        means today already matches or exceeds a normal day for that model.
-        Models are unioned across today + baseline so a model that ran today
-        but not in-window (or vice versa) still shows.
-        """
-        cmp = snap.compare
-        win = cmp.windows.get(baseline)
-        if win is None:
-            return None
-        today_m = cmp.today_model_cost
-        avg_m = win.model_avg_cost
-        models = set(today_m) | set(avg_m)
-        models.discard("—")
-        if not models:
-            return None
-
-        ranked = sorted(models, key=lambda mm: today_m.get(mm, 0.0), reverse=True)
-        rows: list[Widget] = []
-        for mm in ranked[:TOP_N_PANEL]:
-            t = today_m.get(mm, 0.0)
-            a = avg_m.get(mm, 0.0)
-            frac = min(t / a, 1.0) if a > 0 else (1.0 if t > 0 else 0.0)
-            delta = self._delta_label(t, a)
-            label = f"{mm}"
-            value = f"{format_cost(t)} {delta}"
-            rows.append(self._panel_row(label, value, frac, model_color(mm)))
-
-        return self._ranked_panel(
-            f"MODEL MIX — TODAY vs {win.label} AVG",
-            f"bar = today ÷ avg · {win.active_days} active days",
-            rows,
-        )
+        return Vertical(stats_row, classes="chart-panel")
 
     # ── TREND tab ───────────────────────────────────────────────────────
     #

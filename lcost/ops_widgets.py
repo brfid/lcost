@@ -319,9 +319,6 @@ class HelpScreen(ModalScreen):
   [b]enter    [/b] Open entry detail
   [b]esc / q  [/b] Close detail
 
-[b]OVERVIEW[/b]
-  [b]m        [/b] Cycle baseline (week / month / all-time)
-
 [b]CALENDAR[/b]
   [b]m        [/b] Toggle metric (cost ↔ requests)
 
