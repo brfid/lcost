@@ -100,6 +100,17 @@ def _iter_individual_entries(ledger: Dict, source_filter: Optional[str] = None):
 
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
+# ── Heatmap color ramps ──
+# Centralized so HUD, HEATMAP tab, and CALENDAR tab stay consistent.
+# Each entry: (color_zero, color_low, color_high)
+HM_COLORS = {
+    "cost":     ((30, 20, 0),   (80, 30, 0),   (255, 140, 0)),
+    "requests": ((20, 15, 30),  (40, 30, 70),  (180, 100, 200)),
+    "tokens":   ((15, 15, 30),  (30, 30, 60),  (153, 153, 204)),
+    "calendar_cost":     ((30, 20, 0),   (60, 30, 0),   (255, 153, 0)),
+    "calendar_requests": ((20, 15, 40),  (40, 30, 70),  (180, 180, 240)),
+}
+
 
 # ── Main app ──
 
@@ -201,6 +212,10 @@ class CostTrackerApp(App):
         self._metrics = LiveMetrics()
         # Last chart-data signature; charts only rebuild when this changes.
         self._last_daily_sig: Optional[tuple] = None
+        # Memoized 7×24 grids: (metric, ledger_sig) → grid.
+        # Avoids re-scanning the full ledger for each heatmap render.
+        self._hm_grids: Dict[tuple, list] = {}
+        self._hm_ledger_sig: Optional[int] = None
 
     def _load_data(self) -> MetricsSnapshot:
         """Reload ledger, recompute aggregates, push a fresh snapshot.
@@ -632,6 +647,33 @@ class CostTrackerApp(App):
         children.append(plot)
         return Vertical(*children, classes="chart-panel")
 
+    def _get_hm_grid(self, metric: str) -> list:
+        """Return a memoized 7×24 grid for the given metric.
+
+        The cache key is (metric, ledger_size). Ledger size is a cheap
+        proxy for data change — it resets whenever the ledger grows.
+        """
+        sig = len(self._ledger)
+        key = (metric, sig)
+        if key not in self._hm_grids or self._hm_ledger_sig != sig:
+            # Invalidate all cached grids when ledger changes size.
+            if self._hm_ledger_sig != sig:
+                self._hm_grids = {}
+                self._hm_ledger_sig = sig
+            grid = [[0.0] * 24 for _ in range(7)]
+            for dt, entry in _iter_individual_entries(self._ledger, self._source_filter):
+                if metric == "cost":
+                    val = entry.get(FIELD_COST, 0)
+                elif metric == "requests":
+                    val = 1.0
+                else:  # tokens
+                    val = float(
+                        entry.get(FIELD_TOKENS_IN, 0) + entry.get(FIELD_TOKENS_OUT, 0)
+                    )
+                grid[dt.weekday()][dt.hour] += val
+            self._hm_grids[key] = grid
+        return self._hm_grids[key]
+
     def _make_chart(self, title: str, draw_fn: Callable,
                     subtitle: str = "") -> Widget:
         """Wrap a plotext draw function in the standard chart-panel scaffolding.
@@ -774,16 +816,16 @@ class CostTrackerApp(App):
             )
 
         # Heatmap: cost by hour × weekday (all-time, fixed)
-        hm_grid = [[0.0] * 24 for _ in range(7)]
-        for dt, entry in _iter_individual_entries(self._ledger, self._source_filter):
-            hm_grid[dt.weekday()][dt.hour] += entry.get(FIELD_COST, 0)
+        hm_grid = self._get_hm_grid("cost")
         hour_ticks = [(h, f"{h:02d}") for h in range(24) if h % 6 == 0]
+        _czero, _clow, _chigh = HM_COLORS["cost"]
         heatmap_widget = HeatmapGrid(
             hm_grid,
             y_labels=DAY_NAMES,
             x_labels=hour_ticks,
-            color_low=(80, 30, 0),
-            color_high=(255, 140, 0),
+            color_zero=_czero,
+            color_low=_clow,
+            color_high=_chigh,
         )
         heatmap_panel = Vertical(
             Label("  COST BY HOUR × WEEKDAY", classes="chart-title"),
@@ -1069,13 +1111,15 @@ class CostTrackerApp(App):
         peak_v = by_date[peak_day] if peak_day else 0
 
         x_labels = list(zip(month_ticks, month_labels)) if month_ticks else []
+        cal_key = f"calendar_{self._calendar_metric}"
+        _czero, _clow, _chigh = HM_COLORS.get(cal_key, HM_COLORS["cost"])
         heatmap = HeatmapGrid(
             grid,
             y_labels=DAY_NAMES,
             x_labels=x_labels,
-            color_low=color_low,
-            color_high=color_high,
-            cell_height=4,
+            color_zero=_czero,
+            color_low=_clow,
+            color_high=_chigh,
         )
 
         # Metric-toggle hint lives in the subtitle so users can discover
@@ -1133,21 +1177,12 @@ class CostTrackerApp(App):
         _cycle = {"cost": "requests", "requests": "tokens", "tokens": "cost"}
         next_m = _cycle[metric]
 
-        # Build 7×24 grid for the selected metric.
-        grid = [[0.0] * 24 for _ in range(7)]
-        for dt, entry in _iter_individual_entries(self._ledger, self._source_filter):
-            if metric == "cost":
-                val = entry.get(FIELD_COST, 0)
-            elif metric == "requests":
-                val = 1.0
-            else:  # tokens
-                val = float(
-                    entry.get(FIELD_TOKENS_IN, 0) + entry.get(FIELD_TOKENS_OUT, 0)
-                )
-            grid[dt.weekday()][dt.hour] += val
-
+        # Use memoized grid — avoids re-scanning the full ledger on metric toggle.
+        grid = self._get_hm_grid(metric)
         flat = [v for row in grid for v in row if v > 0]
         total_v = sum(v for row in grid for v in row)
+
+        color_zero, color_low, color_high = HM_COLORS.get(metric, HM_COLORS["cost"])
 
         if flat:
             peak_val = max(flat)
@@ -1161,29 +1196,25 @@ class CostTrackerApp(App):
                     f"({format_cost(peak_val)})"
                 )
                 total_label = format_cost(total_v)
-                title = "HEATMAP — COST BY HOUR × WEEKDAY"
-                color_low, color_high = (80, 30, 0), (255, 140, 0)
+                title = "COST BY HOUR × WEEKDAY"
             elif metric == "requests":
                 peak_label = (
                     f"{DAY_NAMES[peak_day]} {peak_hour:02d}:00 "
                     f"({int(peak_val):,} req)"
                 )
                 total_label = f"{int(total_v):,} req"
-                title = "HEATMAP — REQUESTS BY HOUR × WEEKDAY"
-                color_low, color_high = (40, 30, 70), (180, 100, 200)
+                title = "REQUESTS BY HOUR × WEEKDAY"
             else:  # tokens
                 peak_label = (
                     f"{DAY_NAMES[peak_day]} {peak_hour:02d}:00 "
                     f"({format_tokens(int(peak_val), compact=True)})"
                 )
                 total_label = format_tokens(int(total_v))
-                title = "HEATMAP — TOKENS BY HOUR × WEEKDAY"
-                color_low, color_high = (30, 30, 60), (153, 153, 204)
+                title = "TOKENS BY HOUR × WEEKDAY"
         else:
             peak_label = "—"
             total_label = "—"
             title = "HEATMAP — BY HOUR × WEEKDAY"
-            color_low, color_high = (80, 30, 0), (255, 140, 0)
 
         # Hour ticks every 3 hours so labels don't clobber each other.
         hour_ticks = [(h, f"{h:02d}") for h in range(24) if h % 3 == 0]
@@ -1191,6 +1222,7 @@ class CostTrackerApp(App):
             grid,
             y_labels=DAY_NAMES,
             x_labels=hour_ticks,
+            color_zero=color_zero,
             color_low=color_low,
             color_high=color_high,
         )

@@ -89,11 +89,10 @@ class FluidBar(_FluidBarBase):
 class HeatmapGrid(Vertical):
     """LCARS-styled 2D heatmap rendered with native Textual cells.
 
-    Plotext's matrix_plot draws one terminal column per cell, which leaves
-    a 40×7 calendar squinting in a corner of the panel. This widget instead
-    lays out cells as a grid of ``Static`` widgets with ``1fr`` widths so
-    they expand to fill the available horizontal space — every cell ends
-    up several columns wide and the heatmap reads at a glance.
+    Each data row is a ``Horizontal`` with ``1fr`` height so the grid fills
+    its container without gaps. Cells are rendered as solid background blocks
+    (no glyph + content-align) so there are no centering gaps regardless of
+    how the container distributes height.
 
     Layout:
       ┌─────────┬───────────────────────────────────────┐
@@ -108,24 +107,24 @@ class HeatmapGrid(Vertical):
       y_labels: One label per row (top-to-bottom).
       x_labels: ``[(col_index, label), ...]`` for sparse x-axis ticks.
       color_zero / color_low / color_high: RGB tuples for the colormap.
-      cell_height: Rows of terminal lines per data row (1 or 2).
     """
 
     DEFAULT_CSS = """
     HeatmapGrid {
         layout: vertical;
-        height: auto;
+        height: 1fr;
         width: 100%;
     }
 
     HeatmapGrid .heatmap-row {
         layout: horizontal;
         width: 100%;
+        height: 1fr;
     }
 
     HeatmapGrid .heatmap-y-label {
         width: 5;
-        height: 1;
+        height: 100%;
         color: #9999CC;
         content-align: right middle;
         padding: 0 1 0 0;
@@ -133,8 +132,7 @@ class HeatmapGrid(Vertical):
 
     HeatmapGrid .heatmap-cell {
         width: 1fr;
-        height: 1;
-        content-align: center middle;
+        height: 100%;
     }
 
     HeatmapGrid .heatmap-x-axis {
@@ -159,7 +157,6 @@ class HeatmapGrid(Vertical):
         color_zero: tuple = (30, 30, 30),
         color_low: tuple = (0, 80, 0),
         color_high: tuple = (0, 255, 100),
-        cell_height: int = 1,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -169,7 +166,6 @@ class HeatmapGrid(Vertical):
         self._color_zero = color_zero
         self._color_low = color_low
         self._color_high = color_high
-        self._cell_height = max(1, cell_height)
 
     @staticmethod
     def _interp(low: tuple, high: tuple, t: float) -> str:
@@ -208,22 +204,17 @@ class HeatmapGrid(Vertical):
 
         for r, row in enumerate(self._grid):
             ylabel = self._y_labels[r] if r < len(self._y_labels) else ""
-            for line in range(self._cell_height):
-                # Only the middle line of a tall cell gets the y-label.
-                mid = self._cell_height // 2
-                lbl = ylabel if line == mid else ""
-                label_widget = Static(
-                    f"[#9999CC]{lbl}[/]",
-                    classes="heatmap-y-label", markup=True,
-                )
-                cells: list[Widget] = [label_widget]
-                for v in row:
-                    color = self._cell_color(v, max_val)
-                    cells.append(Static(
-                        f"[{color}]████[/]",
-                        classes="heatmap-cell", markup=True,
-                    ))
-                yield Horizontal(*cells, classes="heatmap-row")
+            label_widget = Static(
+                f"[#9999CC]{ylabel}[/]",
+                classes="heatmap-y-label", markup=True,
+            )
+            cells: list[Widget] = [label_widget]
+            for v in row:
+                color = self._cell_color(v, max_val)
+                cell = Static("", classes="heatmap-cell")
+                cell.styles.background = color
+                cells.append(cell)
+            yield Horizontal(*cells, classes="heatmap-row")
 
 
 # ── Hourly activity bar ───────────────────────────────────────────────────
