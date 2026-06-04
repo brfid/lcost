@@ -303,11 +303,11 @@ class HelpScreen(ModalScreen):
     ]
 
     _HELP_TEXT = """\
-[b]Navigation[/b]
-  [b]] / [    [/b] Next / prev tab
-  [b]1–7      [/b] Jump direct: 1 OVERVIEW 2 RECENT 3 OPS
-              4 TREND 5 CALENDAR 6 HEATMAP
-              7 CALLS
+[b]HUD (default)[/b]
+  [b]0 / esc  [/b] Return to HUD from any drill-down
+  [b]1–7      [/b] Drill into: 1 OVERVIEW 2 RECENT 3 OPS
+              4 TREND 5 CALENDAR 6 HEATMAP 7 CALLS
+  [b]] / [    [/b] Cycle through drill-down tabs
 
 [b]Scrolling[/b]
   [b]j / k    [/b] Down / up one row
@@ -315,14 +315,12 @@ class HelpScreen(ModalScreen):
   [b]ctrl+d/u [/b] Page down / up
   [b]g / G    [/b] Jump to top / bottom
 
-[b]OPS log[/b]
+[b]Call log (HUD + OPS)[/b]
   [b]enter    [/b] Open entry detail
   [b]esc / q  [/b] Close detail
 
-[b]CALENDAR[/b]
-  [b]m        [/b] Toggle metric (cost ↔ requests)
-
-[b]OPS[/b]
+[b]Metric toggles[/b]
+  [b]m        [/b] Cycle metric (RECENT / TREND / CALENDAR / HEATMAP)
   [b]h        [/b] Cycle hourly bar (cost / tokens / requests)
 
 [b]General[/b]

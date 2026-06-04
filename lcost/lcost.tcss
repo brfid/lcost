@@ -548,6 +548,98 @@ Sparkline > .sparkline--min-color {
     background: #333333;
 }
 
+/* ── HUD layout ── */
+
+/* Top KPI strip: compact single-line cells */
+#hud-kpi-strip {
+    height: 3;
+    width: 100%;
+    layout: horizontal;
+    margin: 0 0 1 0;
+}
+
+.hud-kpi-cell {
+    width: 1fr;
+    height: 3;
+    padding: 0 0 0 1;
+    background: #0a0a0a;
+    border-left: outer #CC6699;
+}
+
+.hud-kpi-cell-alt {
+    border-left: outer #9999CC;
+}
+
+.hud-kpi-cell-accent {
+    border-left: outer #FF9900;
+}
+
+.hud-kpi-label {
+    height: 1;
+    color: #9999CC;
+    text-style: bold;
+}
+
+.hud-kpi-value {
+    height: 1;
+    color: #FF9900;
+    text-style: bold;
+}
+
+.hud-kpi-detail {
+    height: 1;
+    color: #CC9966;
+}
+
+/* Middle tier: trend chart + heatmap side by side */
+#hud-mid {
+    height: 1fr;
+    min-height: 14;
+    layout: horizontal;
+    margin: 0 0 1 0;
+}
+
+#hud-trend {
+    width: 1fr;
+    height: 100%;
+    margin: 0 1 0 0;
+}
+
+#hud-heatmap {
+    width: 1fr;
+    height: 100%;
+}
+
+/* Hourly bar row */
+#hud-hourly {
+    height: 4;
+    width: 100%;
+    margin: 0 0 1 0;
+}
+
+/* Ranking panels row */
+#hud-ranking {
+    height: auto;
+    width: 100%;
+    layout: horizontal;
+    margin: 0 0 1 0;
+}
+
+/* Call log fills remaining space */
+#hud-log {
+    height: 1fr;
+    min-height: 8;
+}
+
+/* Compact HUD: hide mid tier on short terminals */
+.hud-compact #hud-mid {
+    display: none;
+}
+
+.hud-compact #hud-kpi-strip {
+    height: 3;
+}
+
 /* ── Entry detail modal ── */
 
 EntryDetailScreen {
