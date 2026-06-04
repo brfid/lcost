@@ -732,6 +732,7 @@ class CompareWindow:
     avg_tokens: int                  # in+out tokens per active day
     avg_requests: float              # calls per active day
     model_avg_cost: Dict[str, float]  # short_model → $ per active day
+    model_avg_tokens: Dict[str, int]  # short_model → in+out tokens per active day
 
 
 @dataclass(frozen=True)
@@ -741,6 +742,7 @@ class CompareView:
     today_tokens: int                # in+out
     today_requests: int
     today_model_cost: Dict[str, float]
+    today_model_tokens: Dict[str, int]
     windows: Dict[str, CompareWindow]
 
 
@@ -759,11 +761,14 @@ def derive_compare_view(entries: List[Tuple], short_model_fn,
     today_tokens = 0
     today_requests = 0
     today_model: Dict[str, float] = defaultdict(float)
+    today_model_tok: Dict[str, int] = defaultdict(int)
 
     acc = {
         key: {
             "cost": 0.0, "tokens": 0, "requests": 0,
-            "model": defaultdict(float), "days": set(),
+            "model": defaultdict(float),
+            "model_tok": defaultdict(int),
+            "days": set(),
         }
         for key, _ in COMPARE_WINDOWS
     }
@@ -783,6 +788,7 @@ def derive_compare_view(entries: List[Tuple], short_model_fn,
             today_tokens += tokens
             today_requests += 1
             today_model[sm] += cost
+            today_model_tok[sm] += tokens
             continue
 
         age = (today - day).days
@@ -793,6 +799,7 @@ def derive_compare_view(entries: List[Tuple], short_model_fn,
                 a["tokens"] += tokens
                 a["requests"] += 1
                 a["model"][sm] += cost
+                a["model_tok"][sm] += tokens
                 a["days"].add(day)
 
     windows: Dict[str, CompareWindow] = {}
@@ -808,6 +815,7 @@ def derive_compare_view(entries: List[Tuple], short_model_fn,
             avg_tokens=a["tokens"] // denom,
             avg_requests=a["requests"] / denom,
             model_avg_cost={m: c / denom for m, c in a["model"].items()},
+            model_avg_tokens={m: int(t / denom) for m, t in a["model_tok"].items()},
         )
 
     return CompareView(
@@ -815,6 +823,7 @@ def derive_compare_view(entries: List[Tuple], short_model_fn,
         today_tokens=today_tokens,
         today_requests=today_requests,
         today_model_cost=dict(today_model),
+        today_model_tokens=dict(today_model_tok),
         windows=windows,
     )
 
