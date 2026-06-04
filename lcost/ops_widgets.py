@@ -320,11 +320,7 @@ class HelpScreen(ModalScreen):
   [b]esc / q  [/b] Close detail
 
 [b]OVERVIEW[/b]
-  [b]m        [/b] Toggle metric (cost ↔ tokens)
-  [b]b        [/b] Cycle baseline (week / month / all-time)
-
-[b]RECENT / HEATMAP[/b]
-  [b]m        [/b] Cycle metric (cost / requests / tokens)
+  [b]m        [/b] Cycle baseline (week / month / all-time)
 
 [b]CALENDAR[/b]
   [b]m        [/b] Toggle metric (cost ↔ requests)
