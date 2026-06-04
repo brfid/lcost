@@ -46,6 +46,7 @@ from .ops_data import (
 )
 from .live_metrics import LiveMetrics, MetricsSnapshot, compute_snapshot
 from .ops_widgets import (
+    LOG_COLUMNS,
     EntryDetailScreen,
     FluidBar,
     HeatmapGrid,
@@ -469,8 +470,8 @@ class CostTrackerApp(App):
         for idx in {prev, new_idx}:
             if 0 <= idx < len(rows) and idx < len(self._ops_row_specs):
                 spec = self._ops_row_specs[idx]
-                text, row_class = self._render_row_spec(spec, selected=(idx == new_idx))
-                rows[idx].update(text)
+                columns, row_class = self._render_row_spec(spec, selected=(idx == new_idx))
+                rows[idx].update(columns)
                 rows[idx].set_classes(row_class)
         if 0 <= new_idx < len(rows):
             with contextlib.suppress(Exception):
@@ -1616,10 +1617,10 @@ class CostTrackerApp(App):
             self._render_tab("OPS")
             return
         for idx, (row, spec) in enumerate(zip(rows, specs)):
-            text, row_class = self._render_row_spec(
+            columns, row_class = self._render_row_spec(
                 spec, selected=(idx == self._selected_row),
             )
-            row.update(text)
+            row.update(columns)
             row.set_classes(row_class)
 
     def _build_ops(self) -> Widget:
@@ -1641,7 +1642,7 @@ class CostTrackerApp(App):
             children.append(ranking_row)
         children.append(self._build_log_panel(snap.ops_entries))
 
-        return Vertical(*children, classes="chart-panel")
+        return Vertical(*children, classes="chart-panel chart-stack")
 
     # ── OPS panel builders ──
 
@@ -1884,6 +1885,23 @@ class CostTrackerApp(App):
 
     # ── Call log panel ──
 
+    # Header labels aligned to LOG_COLUMNS widths.
+    # Each entry is the header text for that column (markup OK).
+    _LOG_HEADER_COLS = [
+        "",           # marker — blank
+        "TIME",       # time
+        "MODEL",      # model
+        "IN",         # in
+        "OUT",        # out
+        "CACHE",      # cache
+        "COST ·",     # cost (· = cost-bar label)
+        "",           # bar — blank
+        "↳",          # subagent marker
+        "TOOLS",      # tools
+        "PROJECT",    # project
+        "ACTIVITY",   # activity
+    ]
+
     def _build_log_panel(self, entries: list) -> Widget:
         """Recent-calls log panel — header + up to LOG_ROW_CAP rows."""
         max_log_cost = max(
@@ -1896,18 +1914,23 @@ class CostTrackerApp(App):
         if self._selected_row >= len(specs):
             self._selected_row = len(specs) - 1 if specs else -1
 
-        children: list[Widget] = [Label(
-            f"   {'TIME':<8} {'MODEL':<12} {'IN':>5} {'OUT':>5} "
-            f"{'CACHE':>11} {'COST':>7} {'·':<8} {'↳':<1} "
-            f"{'TOOLS':<8} {'PROJECT':<14} ACTIVITY",
-            classes="ops-log-header",
-        )]
+        # Header row: one Static per column, same widths as LogRow cells.
+        header_cells: list[Widget] = []
+        for hdr, (css_cls, _w) in zip(self._LOG_HEADER_COLS, LOG_COLUMNS):
+            header_cells.append(Static(
+                f"[b #9999CC]{hdr}[/]" if hdr else "",
+                classes=css_cls,
+                markup=True,
+            ))
+        header = Horizontal(*header_cells, classes="ops-log-header")
+
+        children: list[Widget] = [header]
         for idx, spec in enumerate(specs):
-            text, row_class = self._render_row_spec(
+            columns, row_class = self._render_row_spec(
                 spec, selected=(idx == self._selected_row),
             )
             children.append(LogRow(
-                text, classes=row_class, markup=True, row_index=idx,
+                columns, row_index=idx, classes=row_class,
             ))
 
         panel = Vertical(*children, classes="ops-panel ops-panel-log")
@@ -1949,7 +1972,12 @@ class CostTrackerApp(App):
         return base
 
     def _render_row_spec(self, spec: RowSpec, selected: bool) -> tuple:
-        """Render a row spec into (markup_text, css_class_string)."""
+        """Render a row spec into (List[str] columns, css_class_string).
+
+        Each element of the returned list corresponds to one column in
+        LOG_COLUMNS order. The caller passes the list directly to
+        LogRow(columns=...) or LogRow.update(columns).
+        """
         e = spec.entry
         dt = spec.dt
         short_m = short_model(e.get("model"))
@@ -1963,7 +1991,7 @@ class CostTrackerApp(App):
         cost = format_cost(display_cost)
         bar = cost_bar(display_cost, spec.max_log_cost)
         proj = short_project(e.get("project", ""))[:14]
-        kind_marker = "[#9999CC]↳[/]" if spec.is_subagent else " "
+        kind_marker = "[#9999CC]↳[/]" if spec.is_subagent else ""
         time_str = dt.strftime("%H:%M:%S")
         tools_str = short_tools(e.get("tools") or [])[:8]
 
@@ -1972,12 +2000,22 @@ class CostTrackerApp(App):
         marker = self._row_marker(spec, selected, is_new)
         row_classes = self._row_classes(spec, selected, is_new)
 
-        text = (
-            f"{marker} {time_str:<8} [{color}]{short_m:<12}[/] "
-            f"{tok_in:>5} {tok_out:>5} {cache_str:>11} {cost:>7} "
-            f"{bar:<8} {kind_marker} {tools_str:<8} {proj:<14} {activity}"
-        )
-        return text, row_classes
+        # One string per LOG_COLUMNS entry (12 columns total).
+        columns = [
+            marker,                              # log-col-marker
+            time_str,                            # log-col-time
+            f"[{color}]{short_m}[/]",            # log-col-model
+            tok_in,                              # log-col-in
+            tok_out,                             # log-col-out
+            cache_str,                           # log-col-cache
+            cost,                                # log-col-cost
+            bar,                                 # log-col-bar
+            kind_marker,                         # log-col-sub
+            tools_str,                           # log-col-tools
+            proj,                                # log-col-project
+            activity,                            # log-col-activity
+        ]
+        return columns, row_classes
 
     @staticmethod
     def _row_activity(spec: RowSpec) -> str:

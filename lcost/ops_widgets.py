@@ -266,17 +266,79 @@ class HourlyBar(Horizontal):
 
 # ── Interactive log row ───────────────────────────────────────────────────
 
-class LogRow(Label):
-    """Label that posts a Clicked message carrying its row index."""
+# Column definitions for the call log.
+# Each entry: (css_class, fixed_width_or_None)
+# width=None → the activity column, which gets width: 1fr in CSS.
+LOG_COLUMNS: List[tuple] = [
+    ("log-col-marker",   2),   # ► / ▶ / ★ / space
+    ("log-col-time",     9),   # HH:MM:SS + space
+    ("log-col-model",   13),   # colored short name
+    ("log-col-in",       6),   # right-aligned token count
+    ("log-col-out",      6),   # right-aligned token count
+    ("log-col-cache",   12),   # rK/wK right-aligned
+    ("log-col-cost",     8),   # right-aligned cost
+    ("log-col-bar",      9),   # block bar
+    ("log-col-sub",      2),   # ↳ or space
+    ("log-col-tools",    9),   # abbrev string
+    ("log-col-project", 15),   # truncated path
+    ("log-col-activity", None),  # fills remainder
+]
+
+
+class LogRow(Horizontal):
+    """Fixed-column log row that posts a Clicked message carrying its index.
+
+    Each column is a separate ``Static`` child with a fixed CSS width so
+    Textual's layout engine — not Python string-padding — governs alignment.
+    Markup inside one cell never shifts adjacent cells.
+
+    ``update(columns)`` accepts a list of per-column markup strings (same
+    order as ``LOG_COLUMNS``) and rewrites each child in place without
+    remounting.
+    """
+
+    DEFAULT_CSS = """
+    LogRow {
+        height: 1;
+        width: 100%;
+    }
+    LogRow .log-col-marker   { width: 2;   height: 1; }
+    LogRow .log-col-time     { width: 9;   height: 1; }
+    LogRow .log-col-model    { width: 13;  height: 1; }
+    LogRow .log-col-in       { width: 6;   height: 1; content-align: right middle; }
+    LogRow .log-col-out      { width: 6;   height: 1; content-align: right middle; }
+    LogRow .log-col-cache    { width: 12;  height: 1; content-align: right middle; }
+    LogRow .log-col-cost     { width: 8;   height: 1; content-align: right middle; }
+    LogRow .log-col-bar      { width: 9;   height: 1; }
+    LogRow .log-col-sub      { width: 2;   height: 1; content-align: center middle; }
+    LogRow .log-col-tools    { width: 9;   height: 1; }
+    LogRow .log-col-project  { width: 15;  height: 1; }
+    LogRow .log-col-activity { width: 1fr; height: 1; overflow: hidden hidden; }
+    """
 
     class Clicked(Message):
         def __init__(self, row_index: int):
             super().__init__()
             self.row_index = row_index
 
-    def __init__(self, *args, row_index: int, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, columns: List[str], row_index: int,
+                 classes: str = "", **kwargs):
+        # Strip any markup= kwarg — we always use markup
+        kwargs.pop("markup", None)
+        super().__init__(classes=classes, **kwargs)
+        self._columns = columns
         self.row_index = row_index
+
+    def compose(self) -> ComposeResult:
+        for text, (css_cls, _width) in zip(self._columns, LOG_COLUMNS):
+            yield Static(text, classes=css_cls, markup=True)
+
+    def update(self, columns: List[str]) -> None:
+        """Rewrite column text in place (no remount)."""
+        self._columns = columns
+        children = list(self.query(Static))
+        for child, text in zip(children, columns):
+            child.update(text)
 
     def on_click(self, event: Click) -> None:
         self.post_message(self.Clicked(self.row_index))
