@@ -242,7 +242,6 @@ Sparkline > .sparkline--min-color {
 }
 
 .chart-title {
-    dock: top;
     height: 1;
     color: #FF9900;
     text-style: bold;
@@ -251,7 +250,6 @@ Sparkline > .sparkline--min-color {
 }
 
 .chart-subtitle {
-    dock: top;
     height: 1;
     color: #9999CC;
     padding: 0 1;
