@@ -5,6 +5,7 @@ themselves given data; they do not know about the ledger, aggregation, or the
 app shell.
 """
 
+import math
 from typing import Callable, Dict, List, Optional
 
 from textual.app import ComposeResult
@@ -177,7 +178,13 @@ class HeatmapGrid(Vertical):
     def _cell_color(self, v: float, mx: float) -> str:
         if mx == 0 or v == 0:
             return f"#{self._color_zero[0]:02X}{self._color_zero[1]:02X}{self._color_zero[2]:02X}"
-        return self._interp(self._color_low, self._color_high, v / mx)
+        # Sqrt scale compresses the top end so gradation is visible on skewed
+        # data. Cells below 1% of the peak are rendered as near-blank (zero
+        # color) so a single stray use doesn't light up like real activity.
+        if v / mx < 0.01:
+            return f"#{self._color_zero[0]:02X}{self._color_zero[1]:02X}{self._color_zero[2]:02X}"
+        t = math.sqrt(v / mx)
+        return self._interp(self._color_low, self._color_high, t)
 
     def compose(self) -> ComposeResult:
         if not self._grid or not self._grid[0]:
@@ -347,7 +354,7 @@ class LogRow(Horizontal):
 # ── Help modal ────────────────────────────────────────────────────────────
 
 class HelpScreen(ModalScreen):
-    """Keyboard shortcut reference overlay."""
+    """Keyboard shortcut reference overlay, context-aware by current view."""
 
     BINDINGS = [
         Binding("escape", "dismiss", "Close"),
@@ -355,26 +362,44 @@ class HelpScreen(ModalScreen):
         Binding("?", "dismiss", "Close"),
     ]
 
-    _HELP_TEXT = """\
-[b]HUD (default)[/b]
-  [b]0 / esc  [/b] Return to HUD from any drill-down
-  [b]1–7      [/b] Drill into: 1 OVERVIEW 2 RECENT 3 OPS
-              4 TREND 5 CALENDAR 6 HEATMAP 7 CALLS
-  [b]] / [    [/b] Cycle through drill-down tabs
+    # Per-view shortcut blocks. Keyed by the active view name
+    # ("BOARD", "TREND", "HEATMAP", "LOG", "CALLS").
+    _VIEW_HELP = {
+        "BOARD": (
+            "BOARD",
+            "  [b]1–4    [/b] Expand a panel fullscreen\n"
+            "  [b]m      [/b] Cycle trend metric (cost / tokens / cache / savings)\n"
+            "  [b]h      [/b] Cycle hourly bar (cost / tokens / requests)\n"
+            "  [b]j / k  [/b] Move call-log selection · [b]enter[/b] detail",
+        ),
+        "TREND": (
+            "TREND (fullscreen)",
+            "  [b]m      [/b] Cycle cost / tokens-io / tokens-cache / savings\n"
+            "  [b]esc/0  [/b] Back to board · [b]] [ [/b] next/prev panel",
+        ),
+        "HEATMAP": (
+            "HEATMAP (fullscreen)",
+            "  [b]m      [/b] Cycle cost / requests / tokens\n"
+            "  [b]esc/0  [/b] Back to board · [b]] [ [/b] next/prev panel",
+        ),
+        "LOG": (
+            "CALL LOG (fullscreen)",
+            "  [b]j / k  [/b] Move selection · [b]J / K[/b] by 10 · [b]g / G[/b] ends\n"
+            "  [b]enter  [/b] Open entry detail\n"
+            "  [b]esc/0  [/b] Back to board · [b]] [ [/b] next/prev panel",
+        ),
+        "CALLS": (
+            "CALLS (fullscreen)",
+            "  [b]esc/0  [/b] Back to board · [b]] [ [/b] next/prev panel",
+        ),
+    }
 
-[b]Scrolling[/b]
-  [b]j / k    [/b] Down / up one row
-  [b]J / K    [/b] Down / up 10 rows
-  [b]ctrl+d/u [/b] Page down / up
-  [b]g / G    [/b] Jump to top / bottom
-
-[b]Call log (HUD + OPS)[/b]
-  [b]enter    [/b] Open entry detail
-  [b]esc / q  [/b] Close detail
-
-[b]Metric toggles[/b]
-  [b]m        [/b] Cycle metric (RECENT / TREND / CALENDAR / HEATMAP)
-  [b]h        [/b] Cycle hourly bar (cost / tokens / requests)
+    _COMMON = """\
+[b]Navigation[/b]
+  [b]1 TREND  2 HEATMAP  3 LOG  4 CALLS[/b] — expand fullscreen
+  [b]0 / esc  [/b] Return to board
+  [b]] / [    [/b] Next / prev fullscreen panel
+  [b]tab      [/b] Move focus (accessibility)
 
 [b]General[/b]
   [b]r        [/b] Pause / resume auto-refresh
@@ -384,11 +409,22 @@ class HelpScreen(ModalScreen):
 [dim]esc / q / ? to close[/dim]\
 """
 
+    def __init__(self, current_view: str = "BOARD", **kwargs):
+        super().__init__(**kwargs)
+        self._current_view = current_view
+
     def compose(self) -> ComposeResult:
+        name, block = self._VIEW_HELP.get(
+            self._current_view, self._VIEW_HELP["BOARD"]
+        )
+        text = (
+            f"[b #FF9900]Current view: {name}[/]\n{block}\n\n{self._COMMON}"
+        )
         yield Vertical(
-            Static(self._HELP_TEXT, id="help-body"),
+            Static(text, id="help-body"),
             id="help-box",
         )
+
 
 
 # ── Detail modal ──────────────────────────────────────────────────────────
@@ -570,41 +606,3 @@ class LiveSparkline(Sparkline):
         if values and any(v > 0 for v in values):
             self.data = values
 
-
-# ── Bindable StatBox ──────────────────────────────────────────────────────
-
-class LiveStatBox(Static):
-    """StatBox whose value/detail/sparkline react to snapshot changes.
-
-    Replaces the original `StatBox` for live panels. The static label stays
-    fixed; value/detail/sparkline bind through selectors.
-    """
-
-    def __init__(self, live, label: str,
-                 value_selector: Callable,
-                 detail_selector: Optional[Callable] = None,
-                 spark_selector: Optional[Callable] = None,
-                 spark_label: str = "",
-                 **kwargs):
-        super().__init__(**kwargs)
-        self._live = live
-        self._label = label
-        self._value_selector = value_selector
-        self._detail_selector = detail_selector
-        self._spark_selector = spark_selector
-        self._spark_label = spark_label
-
-    def compose(self) -> ComposeResult:
-        with Vertical(classes="stat-text"):
-            yield Label(self._label, classes="stat-label")
-            yield LiveLabel(self._live, self._value_selector,
-                            classes="stat-value")
-            if self._detail_selector is not None:
-                yield LiveLabel(self._live, self._detail_selector,
-                                classes="stat-detail")
-        if self._spark_selector is not None:
-            with Vertical(classes="stat-spark"):
-                yield LiveSparkline(self._live, self._spark_selector,
-                                    summary_function=max)
-                if self._spark_label:
-                    yield Label(self._spark_label, classes="spark-caption")

@@ -11,199 +11,80 @@ Screen {
 
 /* ── Top bar ── */
 
+/* Single-row top bar: the stardate rides inline with the title instead of
+   a 3-tall elbow box, saving two rows. */
 #top-bar {
     dock: top;
-    height: 3;
+    height: 1;
     background: #000000;
     layout: horizontal;
 }
 
 #top-elbow {
-    width: 12;
-    height: 3;
+    width: auto;
+    height: 1;
+    padding: 0 2;
     background: #CC6699;
     content-align: center middle;
     color: #000000;
     text-style: bold;
 }
 
-#top-bar-line {
-    width: 1fr;
-    height: 1;
-    margin-top: 1;
-    background: #CC6699;
-}
-
 #top-title {
     width: auto;
     padding: 0 2;
-    margin-top: 1;
     height: 1;
     color: #FF9900;
     text-style: bold;
     background: #000000;
 }
 
+#top-bar-line {
+    width: 1fr;
+    height: 1;
+    background: #CC6699;
+}
+
+
 /* ── Bottom bar ── */
 
 #bottom-bar {
     dock: bottom;
-    height: 3;
+    height: 1;
     background: #000000;
     layout: horizontal;
-}
-
-#bottom-elbow {
-    width: 12;
-    height: 3;
-    background: #9999CC;
 }
 
 #bottom-bar-line {
     width: 1fr;
     height: 1;
-    margin-bottom: 1;
     background: #9999CC;
 }
 
 #bottom-status {
     width: auto;
     padding: 0 2;
-    margin-bottom: 1;
     height: 1;
     color: #9999CC;
     background: #000000;
 }
 
-/* ── Sidebar nav ── */
-
-#sidebar {
-    dock: left;
-    width: 12;
-    background: #000000;
-    padding: 1 0 0 0;
-}
-
-.nav-button {
-    width: 100%;
-    height: 3;
-    margin-bottom: 1;
-    padding: 0 2 0 0;
-    text-style: bold;
-    color: #000000;
-    background: #CC9966;
-    content-align: right middle;
-}
-
-.nav-button:hover {
-    background: #FF9900;
-}
-
-.nav-button.active {
-    background: #FF9900;
-}
-
-/* Compact sidebar: 1-row labels for short terminals */
-#sidebar.compact .nav-button {
-    height: 1;
-    margin-bottom: 0;
-    background: #000000;
-    color: #CC9966;
-}
-
-#sidebar.compact .nav-button:hover,
-#sidebar.compact .nav-button.active {
-    background: #000000;
-    color: #FF9900;
-}
 
 /* ── Main content ── */
+/* No left rule: the LCARS color language now rides the panel borders
+   (amber trend, periwinkle heatmap, mauve elsewhere) instead of a single
+   full-height edge bar. Numbers drive the views; no nav rail. */
 
 #main-content {
-    margin: 0 1;
+    margin: 0;
+    padding: 0;
     background: #000000;
 }
 
-/* ── Overview panel ── */
-
-#overview-panel {
-    layout: grid;
-    grid-size: 3 2;
-    grid-columns: 1fr 1fr 1fr;
-    grid-rows: 1fr 1fr;
-    grid-gutter: 1 1;
-    padding: 1;
-    height: 1fr;
-}
-
-.stat-box {
-    width: 100%;
-    height: 100%;
-    min-height: 10;
-    border: round #CC6699;
-    padding: 0 1;
-    background: #0a0a0a;
-    layout: vertical;
-    align: left middle;
-}
-
-.stat-box .stat-text {
-    width: 100%;
-    height: auto;
-    layout: vertical;
-    padding: 1 0 0 0;
-}
-
-.stat-box .stat-label {
-    width: 100%;
-    height: 1;
-    color: #9999CC;
-    text-style: bold;
-    text-align: left;
-    padding: 0;
-}
-
-.stat-box .stat-value {
-    width: 100%;
-    height: 1;
-    color: #FF9900;
-    text-style: bold;
-    text-align: left;
-    padding: 0;
-}
-
-.stat-box .stat-detail {
-    width: 100%;
-    height: 1;
-    color: #CC9966;
-    text-align: left;
-    padding: 0;
-}
-
-.stat-box .stat-spark {
-    width: 100%;
-    height: auto;
-    layout: vertical;
-    padding: 1 0 0 0;
-}
-
-.stat-box .spark-caption {
-    width: 100%;
-    height: 1;
-    color: #666699;
-    text-style: italic;
-    text-align: right;
-    padding: 0;
-}
-
-.stat-box Sparkline {
-    width: 100%;
-    height: 2;
-    margin: 0;
-}
 
 Sparkline {
     height: 3;
+
     margin: 0 1;
 }
 
@@ -258,21 +139,9 @@ Sparkline > .sparkline--min-color {
 
 /* ── OPS tab ── */
 
-.ops-section-title {
-    height: 1;
-    color: #FF9900;
-    text-style: bold;
-    padding: 0 1;
-}
-
-.ops-section-line {
-    height: 1;
-    color: #9999CC;
-    padding: 0 1;
-}
-
 .ops-kv-line {
     height: 1;
+
     color: #CC9966;
     padding: 0 1;
 }
@@ -386,12 +255,6 @@ Sparkline > .sparkline--min-color {
     height: 1;
 }
 
-.ops-mix-model-bar {
-    height: 1;
-    width: 100%;
-    margin-bottom: 0;
-}
-
 .ops-hourly-spark > .sparkline--max-color {
     color: #FF9900;
 }
@@ -400,48 +263,15 @@ Sparkline > .sparkline--min-color {
     color: #CC6699;
 }
 
-.ops-project-name {
-    height: 1;
-    color: #FFCC99;
-    padding: 0 1;
-}
-
-.ops-project-bar {
-    height: 1;
-    padding: 0 1;
-    margin-bottom: 1;
-}
-
-.ops-mix-bar {
-    height: 1;
-    padding: 0 1;
-    margin-bottom: 1;
-}
-
-.ops-mix-legend {
-    height: 1;
-    padding: 0 1;
-}
-
 .ops-side-by-side {
     height: auto;
     width: 100%;
-    margin: 0 0 1 0;
-}
-
-.ops-panel-half {
-    width: 1fr;
-    height: auto;
-    min-height: 5;
-    margin: 0 1 0 0;
-}
-
-.ops-panel-half:last-of-type {
-    margin-right: 0;
+    margin: 0;
 }
 
 .ops-panel-third {
     width: 1fr;
+
     height: auto;
     min-height: 5;
     margin: 0 1 0 0;
@@ -549,21 +379,41 @@ Sparkline > .sparkline--min-color {
 
 /* ── HUD layout ── */
 
-/* Top KPI strip: compact single-line cells */
+/* Top KPI strip: label · value · detail · sparkline */
 #hud-kpi-strip {
-    height: 3;
+    height: 6;
     width: 100%;
     layout: horizontal;
-    margin: 0 0 1 0;
+    margin: 0;
 }
+
 
 .hud-kpi-cell {
     width: 1fr;
-    height: 3;
+    height: 6;
     padding: 0 0 0 1;
     background: #0a0a0a;
     border-left: outer #CC6699;
 }
+
+/* Leftmost cell sits flush with the strip edge — no leading accent tab
+   (there's no matching trailing edge on the rightmost cell). The
+   inter-cell tabs stay and read as dividers. */
+#hud-kpi-strip > .hud-kpi-cell:first-of-type {
+    border-left: none;
+    padding-left: 2;
+}
+
+
+.hud-kpi-spark {
+    width: 100%;
+    height: 2;
+    margin: 0 1 0 0;
+}
+
+.hud-kpi-spark > .sparkline--max-color { color: #FF9900; }
+.hud-kpi-spark > .sparkline--min-color { color: #CC6699; }
+
 
 .hud-kpi-cell-alt {
     border-left: outer #9999CC;
@@ -590,30 +440,47 @@ Sparkline > .sparkline--min-color {
     color: #CC9966;
 }
 
-/* Middle tier: trend chart + heatmap side by side */
+/* Middle tier: trend chart + heatmap side by side.
+   min-height 18 keeps the trend plot tall enough for plotext to render
+   the x-axis date labels — it drops that row first under height pressure,
+   and the panel title/subtitle now ride the border instead of eating two
+   plot rows. */
 #hud-mid {
     height: 1fr;
-    min-height: 14;
+    min-height: 18;
     layout: horizontal;
-    margin: 0 0 1 0;
+    margin: 0;
 }
 
+
+/* Mid-tier borders carry the LCARS color language: amber on the trend
+   (cost), periwinkle on the heatmap. Everything else stays mauve. */
 #hud-trend {
     width: 1fr;
     height: 100%;
     margin: 0 1 0 0;
+    border: round #FF9900;
+    border-title-color: #FF9900;
+    border-title-style: bold;
+    border-subtitle-color: #9999CC;
 }
 
 #hud-heatmap {
     width: 1fr;
     height: 100%;
+    border: round #9999CC;
+    border-title-color: #9999CC;
+    border-title-style: bold;
+    border-subtitle-color: #CC9966;
 }
+
+
 
 /* Hourly bar row */
 #hud-hourly {
     height: 4;
     width: 100%;
-    margin: 0 0 1 0;
+    margin: 0;
 }
 
 /* Ranking panels row */
@@ -621,8 +488,9 @@ Sparkline > .sparkline--min-color {
     height: auto;
     width: 100%;
     layout: horizontal;
-    margin: 0 0 1 0;
+    margin: 0;
 }
+
 
 /* Call log fills remaining space */
 #hud-log {

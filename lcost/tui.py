@@ -32,9 +32,8 @@ from .ledger import get_ledger_path, load_ledger
 from .pipeline import run_ingest
 from .ops_data import (
     LOG_ROW_CAP,
-    RECENT_BUCKET_MIN,
-    RECENT_WINDOW_HOURS,
     OpsView,
+
     RowSpec,
     build_row_specs,
     cost_bar,
@@ -54,31 +53,36 @@ from .ops_widgets import (
     LiveBorderSubtitle,
     LiveHourlyBar,
     LiveLabel,
-    LiveStatBox,
+    LiveSparkline,
     LiveStatic,
     LogRow,
 )
 
-# Tab order: live → trends → patterns → distribution.
-# One tab per imposition; metric is always the toggle (m).
-# Bindings 1–7 stay clean.
-TABS = [
-    # Live: what's happening right now / today
-    "OVERVIEW",   # 1 — today vs avg · m cycles week/month/all baseline
-    "RECENT",     # 2 — rolling 12h bars · m cycles cost/requests/tokens
-    "OPS",        # 3 — today + call log (h cycles hourly bar metric)
-    # Trends: daily time series
-    "TREND",      # 4 — daily bars/lines · m cycles cost/tokens-io/tokens-cache/savings
-    # Patterns: when do I work
-    "CALENDAR",   # 5 — last-month heatmap · m cycles cost/requests
-    "HEATMAP",    # 6 — hour×weekday · m cycles cost/requests/tokens
-    # Distribution
-    "CALLS",      # 7 — per-call cost histogram
-]
+# Single-board model. The board is the only home view; number keys expand
+# one panel to fullscreen, Escape/0 returns to the board.
+#
+# Expandable fullscreen views and their number keys:
+#   1 TREND    daily cost line (m cycles cost/tokens_io/tokens_cache/savings)
+#   2 HEATMAP  hour×weekday    (m cycles cost/requests/tokens)
+#   3 LOG      call log        (j/k, enter detail)
+#   4 CALLS    per-call cost histogram (board-only-absent; expand-only)
+EXPANDABLE = ["TREND", "HEATMAP", "LOG", "CALLS"]
 
-# HUD is the default landing screen — not in TABS (no sidebar nav entry).
-# Number keys 1–7 drill into the corresponding tab; Escape/0 returns here.
-HUD = "HUD"
+# The board home view sentinel.
+BOARD = "BOARD"
+
+# Metric cycle orders, shared between the keypress handler that advances the
+# metric and the panel builder that labels the "next" step.
+TREND_CYCLE = {
+    "cost": "tokens_io",
+    "tokens_io": "tokens_cache",
+    "tokens_cache": "savings",
+    "savings": "cost",
+}
+HEATMAP_CYCLE = {"cost": "requests", "requests": "tokens", "tokens": "cost"}
+HOURLY_CYCLE = {"cost": "tokens", "tokens": "requests", "requests": "cost"}
+
+
 
 
 # ── Helper: aggregate by hour-of-day × day-of-week ──
@@ -105,11 +109,15 @@ DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 # Centralized so HUD, HEATMAP tab, and CALENDAR tab stay consistent.
 # Each entry: (color_zero, color_low, color_high)
 HM_COLORS = {
-    "cost":     ((30, 20, 0),   (80, 30, 0),   (255, 140, 0)),
-    "requests": ((20, 15, 30),  (40, 30, 70),  (180, 100, 200)),
-    "tokens":   ((15, 15, 30),  (30, 30, 60),  (153, 153, 204)),
-    "calendar_cost":     ((30, 20, 0),   (60, 30, 0),   (255, 153, 0)),
-    "calendar_requests": ((20, 15, 40),  (40, 30, 70),  (180, 180, 240)),
+    # (color_zero, color_low, color_high)
+    # color_low is intentionally close to color_zero: with the sqrt scale +
+    # 1% floor in HeatmapGrid._cell_color, low-activity cells start near-blank
+    # and only climb toward color_high as intensity grows.
+    "cost":     ((30, 20, 0),   (40, 22, 0),   (255, 140, 0)),
+    "requests": ((20, 15, 30),  (25, 18, 35),  (180, 100, 200)),
+    "tokens":   ((15, 15, 30),  (20, 18, 35),  (153, 153, 204)),
+    "calendar_cost":     ((30, 20, 0),   (38, 22, 0),   (255, 153, 0)),
+    "calendar_requests": ((20, 15, 40),  (25, 18, 45),  (180, 180, 240)),
 }
 
 
@@ -141,13 +149,13 @@ class CostTrackerApp(App):
         Binding("ctrl+c", "quit", "Quit", priority=True),
         Binding("r", "toggle_refresh", "Toggle refresh"),
         Binding("?", "show_help", "Help"),
-        # Return to HUD from any drill-down tab
-        Binding("escape", "go_hud", "HUD", show=False),
-        Binding("0", "go_hud", "HUD", show=False),
-        # Tab navigation
-        Binding("]", "tab_next", "Next tab", show=False),
-        Binding("[", "tab_prev", "Prev tab", show=False),
-        # Row navigation (OPS/HUD log) / scroll (other tabs)
+        # Return to the board from any fullscreen panel
+        Binding("escape", "board", "Board", show=False),
+        Binding("0", "board", "Board", show=False),
+        # Cycle through fullscreen panels
+        Binding("]", "expand_next", "Next panel", show=False),
+        Binding("[", "expand_prev", "Prev panel", show=False),
+        # Row navigation (board/LOG call log) / scroll (other panels)
         Binding("j", "scroll_log(1)", "Scroll ↓", show=False),
         Binding("k", "scroll_log(-1)", "Scroll ↑", show=False),
         Binding("J", "scroll_log(10)", "Page ↓", show=False),
@@ -157,24 +165,20 @@ class CostTrackerApp(App):
         Binding("g", "jump_top", "Top", show=False),
         Binding("G", "jump_bottom", "Bottom", show=False),
         Binding("enter", "expand_selected", "Expand row", show=False),
-        # Number shortcuts. 0 = HUD; 1–7 = drill-down tabs.
-        #   1 OVERVIEW    2 RECENT    3 OPS
-        #   4 TREND       5 CALENDAR  6 HEATMAP   7 CALLS
-        Binding("1", "tab('OVERVIEW')", "Overview", show=False),
-        Binding("2", "tab('RECENT')", "Recent", show=False),
-        Binding("3", "tab('OPS')", "Ops", show=False),
-        Binding("4", "tab('TREND')", "Trend", show=False),
-        Binding("5", "tab('CALENDAR')", "Calendar", show=False),
-        Binding("6", "tab('HEATMAP')", "Heatmap", show=False),
-        Binding("7", "tab('CALLS')", "Calls", show=False),
-        # Unified metric toggle — dispatches by current tab
-        # RECENT: cost/requests/tokens  TREND: cost/tokens-io/tokens-cache/savings
-        # CALENDAR: cost/requests       HEATMAP: cost/requests/tokens
+        # Number shortcuts — expand a panel to fullscreen. 0/esc → board.
+        #   1 TREND   2 HEATMAP   3 LOG   4 CALLS
+        Binding("1", "expand('TREND')", "Trend", show=False),
+        Binding("2", "expand('HEATMAP')", "Heatmap", show=False),
+        Binding("3", "expand('LOG')", "Call log", show=False),
+        Binding("4", "expand('CALLS')", "Calls", show=False),
+        # Unified metric toggle — board cycles the trend metric; a
+        # fullscreen panel cycles its own metric (TREND/HEATMAP).
         Binding("m", "toggle_metric", "Toggle metric", show=False),
-        # OPS-only hourly-bar metric toggle (cost / tokens / requests)
+        # Hourly-bar metric toggle (cost / tokens / requests)
         Binding("h", "toggle_hourly_metric", "Toggle hourly metric",
                 show=False),
     ]
+
 
     def __init__(self, ledger_path_override=None, source_filter="all",
                  no_ingest=False, force_ingest=False, **kwargs):
@@ -186,23 +190,21 @@ class CostTrackerApp(App):
         self._ledger: Dict = {}
         self._daily: Dict = {}
         self._source_filter: Optional[str] = None
-        self._current_tab: str = HUD
+        # Active view: BOARD (home) or one of EXPANDABLE when fullscreen.
+        self._current_tab: str = BOARD
         self._auto_refresh: bool = True
         self._refresh_timer = None
         # Diff tracking for auto-refresh highlight: id → ticks-remaining
         self._new_entry_ids: Dict[str, int] = {}
         self._seen_ids: set = set()
-        # Selected row index in OPS call log; -1 means no selection
+        # Selected row index in the call log; -1 means no selection
         self._selected_row: int = -1
         # Per-row spec cache so selection moves don't rebuild labels
         self._ops_row_specs: List[RowSpec] = []
-        # Per-tab metric state — all sticky across tab switches.
-        # CALENDAR: cost ↔ requests
-        self._calendar_metric: str = "cost"
-        # RECENT: cost → requests → tokens
-        self._recent_metric: str = "cost"
+        # Per-panel metric state — sticky across expand/collapse.
         # TREND: cost → tokens_io → tokens_cache → savings
         self._trend_metric: str = "cost"
+
         # HEATMAP: cost → requests → tokens
         self._heatmap_metric: str = "cost"
         # OPS hourly bar cycles: "cost" → "tokens" → "requests"
@@ -282,52 +284,36 @@ class CostTrackerApp(App):
             yield Static("", id="top-bar-line")
 
         with Horizontal():
-            with Vertical(id="sidebar"):
-                for tab_name in TABS:
-                    slug = tab_name.lower().replace(" ", "-")
-                    yield Label(tab_name, id=f"nav-{slug}",
-                                classes="nav-button")
-
             with VerticalScroll(id="main-content"):
                 yield Vertical(id="panel-container")
 
+
         with Horizontal(id="bottom-bar"):
-            yield Static("", id="bottom-elbow")
             yield Static("", id="bottom-status")
+
             yield Static("", id="bottom-bar-line")
 
-    # Terminal height below this triggers compact sidebar (1-row nav buttons)
-    COMPACT_SIDEBAR_ROWS = 45
-    # Terminal height below this collapses the HUD mid-tier (charts)
-    HUD_COMPACT_ROWS = 38
+    # Terminal height below this collapses the board mid-tier (charts).
+    # Lowered as inter-section row gaps were removed, so the charts fit
+    # in shorter terminals before the mid tier has to collapse.
+    HUD_COMPACT_ROWS = 34
+
 
     def on_mount(self) -> None:
         snap = self._load_data()
         self._last_daily_sig = snap.daily_signature
         self._update_status_bar()
-        self._render_hud()
+        self._render_board()
         self._refresh_timer = self.set_interval(
             self.REFRESH_INTERVAL, self._auto_refresh_tick
         )
-        self._apply_sidebar_density()
 
     def on_resize(self, event) -> None:
-        self._apply_sidebar_density()
-        if self._current_tab == HUD:
+        if self._current_tab == BOARD:
             self._apply_hud_density()
 
-    def _apply_sidebar_density(self) -> None:
-        try:
-            sidebar = self.query_one("#sidebar")
-        except Exception:
-            return
-        if self.size.height < self.COMPACT_SIDEBAR_ROWS:
-            sidebar.add_class("compact")
-        else:
-            sidebar.remove_class("compact")
-
     def _apply_hud_density(self) -> None:
-        """Toggle .hud-compact on the HUD container based on terminal height."""
+        """Toggle .hud-compact on the board container based on terminal height."""
         try:
             container = self.query_one("#panel-container", Vertical)
         except Exception:
@@ -337,6 +323,7 @@ class CostTrackerApp(App):
         else:
             container.remove_class("hud-compact")
 
+
     def _update_status_bar(self) -> None:
         entry_count = len(self._ledger)
         day_count = len(self._daily)
@@ -344,8 +331,9 @@ class CostTrackerApp(App):
         new_count = len(self._new_entry_ids)
         new_badge = f" · [#FF9900]+{new_count} new[/]" if new_count else ""
         dot = " [#9999CC]◤[/] "
-        hint = (f"{dot}\\[/] tabs{dot}j/k · g/G{dot}ENTER details"
-                f"{dot}r pause{dot}? help{dot}q / ^C quit")
+        hint = (f"{dot}1-4 expand{dot}esc board{dot}m metric · h hourly"
+                f"{dot}j/k · ENTER details{dot}r pause{dot}? help{dot}q quit")
+
         status = self.query_one("#bottom-status", Static)
         status.update(
             f"  [#FF9900]{entry_count:,}[/] entries{dot}"
@@ -353,14 +341,8 @@ class CostTrackerApp(App):
             f"{refresh_icon} {self.REFRESH_INTERVAL}s{new_badge}{hint}  ",
         )
 
-    # Tabs whose content is pure-chart (plotext/heatmap). These don't
-    # subscribe to LiveMetrics reactively, so their tick-time refresh path
-    # is a full `_render_tab` — but only when the underlying daily data
-    # (or hourly grid, for COST MAP) actually changed. RECENT is included
-    # because its 12h window slides with the clock, not the daily aggregate.
-    _CHART_TABS = frozenset({
-        "TREND", "CALENDAR", "HEATMAP", "CALLS", "RECENT",
-    })
+    # Views with a selectable/scrollable call log (board + fullscreen LOG).
+    _LOG_VIEWS = frozenset({BOARD, "LOG"})
 
     def _auto_refresh_tick(self) -> None:
         if not self._auto_refresh:
@@ -372,64 +354,62 @@ class CostTrackerApp(App):
         data_changed = snap.daily_signature != self._last_daily_sig
         self._last_daily_sig = snap.daily_signature
 
-        # HUD: rebuild when data changes (chart + heatmap are static widgets,
-        # not reactive; KPI cells self-update via LiveLabel watchers).
-        if self._current_tab == HUD:
+        # Board: rebuild when data changes (chart + heatmap are static
+        # widgets, not reactive; KPI cells self-update via LiveLabel
+        # watchers). The call log rows refresh in place below.
+        if self._current_tab == BOARD:
             if data_changed:
-                self._render_hud()
+                self._render_board()
+            else:
+                self._refresh_log_rows()
             return
 
-        # Live tabs (OVERVIEW, OPS) self-update via reactive watchers.
-        # Chart tabs need an explicit rebuild, but only when data changed —
-        # minute rollovers alone shouldn't redraw plotext.
-        if self._current_tab in self._CHART_TABS and data_changed:
-            self._render_tab(self._current_tab)
-            return
-
-        # OPS call-log rows aren't reactive (each row's markup depends on
-        # per-row selected/new state). Refresh them in place when the row
-        # contents changed.
-        if self._current_tab == "OPS":
+        # Fullscreen LOG refreshes rows in place; other fullscreen panels
+        # are pure charts — rebuild only when daily data changed.
+        if self._current_tab == "LOG":
             self._refresh_log_rows()
+        elif data_changed:
+            self._render_panel(self._current_tab)
 
     def action_toggle_refresh(self) -> None:
         self._auto_refresh = not self._auto_refresh
         self._update_status_bar()
 
-    def action_tab_next(self) -> None:
-        if self._current_tab == HUD:
-            self.action_tab(TABS[0])
+    def action_expand_next(self) -> None:
+        if self._current_tab == BOARD:
+            self.action_expand(EXPANDABLE[0])
             return
-        idx = (TABS.index(self._current_tab) + 1) % len(TABS)
-        self.action_tab(TABS[idx])
+        idx = (EXPANDABLE.index(self._current_tab) + 1) % len(EXPANDABLE)
+        self.action_expand(EXPANDABLE[idx])
 
-    def action_tab_prev(self) -> None:
-        if self._current_tab == HUD:
-            self.action_tab(TABS[-1])
+    def action_expand_prev(self) -> None:
+        if self._current_tab == BOARD:
+            self.action_expand(EXPANDABLE[-1])
             return
-        idx = (TABS.index(self._current_tab) - 1) % len(TABS)
-        self.action_tab(TABS[idx])
+        idx = (EXPANDABLE.index(self._current_tab) - 1) % len(EXPANDABLE)
+        self.action_expand(EXPANDABLE[idx])
 
     def action_jump_top(self) -> None:
-        if self._current_tab == "OPS" and self._ops_entries_cache:
+        if self._current_tab in self._LOG_VIEWS and self._ops_entries_cache:
             self._set_selected_row(0)
         else:
             with contextlib.suppress(Exception):
                 self.query_one("#main-content", VerticalScroll).scroll_home(animate=False)
 
     def action_jump_bottom(self) -> None:
-        if self._current_tab == "OPS" and self._ops_entries_cache:
+        if self._current_tab in self._LOG_VIEWS and self._ops_entries_cache:
             self._set_selected_row(min(100, len(self._ops_entries_cache)) - 1)
         else:
             with contextlib.suppress(Exception):
                 self.query_one("#main-content", VerticalScroll).scroll_end(animate=False)
 
     def action_show_help(self) -> None:
-        self.push_screen(HelpScreen())
+        self.push_screen(HelpScreen(self._current_tab))
 
     def action_scroll_log(self, delta: int) -> None:
-        """On OPS: move selection. Off OPS: scroll container."""
-        if self._current_tab == "OPS":
+        """In log views: move selection. Elsewhere: scroll container."""
+        if self._current_tab in self._LOG_VIEWS:
+
             if not self._ops_entries_cache:
                 return
             max_idx = min(100, len(self._ops_entries_cache)) - 1
@@ -447,7 +427,7 @@ class CostTrackerApp(App):
         scroller.scroll_relative(y=delta, animate=False)
 
     def _set_selected_row(self, new_idx: int) -> None:
-        """Move selection in place without rebuilding the whole OPS panel.
+        """Move call-log selection in place without rebuilding the panel.
 
         Updates the previously-selected row (if any) and the new one, then
         scrolls the new one into view. Falls back to a full rerender only
@@ -456,15 +436,15 @@ class CostTrackerApp(App):
         prev = self._selected_row
         self._selected_row = new_idx
         if not self._ops_row_specs:
-            self._render_tab("OPS")
+            self._rerender_current()
             return
         try:
             rows = list(self.query(LogRow))
         except Exception:
-            self._render_tab("OPS")
+            self._rerender_current()
             return
         if not rows:
-            self._render_tab("OPS")
+            self._rerender_current()
             return
         # Update only the two rows whose state changed
         for idx in {prev, new_idx}:
@@ -477,13 +457,20 @@ class CostTrackerApp(App):
             with contextlib.suppress(Exception):
                 rows[new_idx].scroll_visible(animate=False)
 
+    def _rerender_current(self) -> None:
+        """Re-render whichever view is active (board or fullscreen)."""
+        if self._current_tab == BOARD:
+            self._render_board()
+        else:
+            self._render_panel(self._current_tab)
+
     def action_expand_selected(self) -> None:
         """Show modal with full prompt + metadata for the selected entry.
 
-        Works from OPS and HUD (both show the call log).
+        Works from the board and the fullscreen LOG (both show the call log).
         If nothing is selected, default to the top-most (most recent) entry.
         """
-        if self._current_tab not in ("OPS", HUD) or not self._ops_entries_cache:
+        if self._current_tab not in self._LOG_VIEWS or not self._ops_entries_cache:
             return
         idx = self._selected_row if self._selected_row >= 0 else 0
         idx = max(0, min(len(self._ops_entries_cache) - 1, idx))
@@ -492,38 +479,15 @@ class CostTrackerApp(App):
 
     def on_log_row_clicked(self, message: "LogRow.Clicked") -> None:
         """Clicking a log row selects it."""
-        if self._current_tab != "OPS":
+        if self._current_tab not in self._LOG_VIEWS:
             return
         self._set_selected_row(message.row_index)
 
-    @staticmethod
-    def _tab_slug(tab_name: str) -> str:
-        return tab_name.lower().replace(" ", "-")
-
-    def _activate_nav(self, tab_name: str) -> None:
-        for lbl in self.query(".nav-button"):
-            lbl.remove_class("active")
-        self.query_one(f"#nav-{self._tab_slug(tab_name)}", Label).add_class("active")
-
-    _SLUG_TO_TAB = {t.lower().replace(" ", "-"): t for t in TABS}
-
     def on_click(self, event: Click) -> None:
-        """Handle nav label clicks; also clears OPS log selection on off-row clicks."""
-        widget = getattr(event, "widget", None)
-
-        # Nav label click
-        lbl_id = getattr(widget, "id", "") or ""
-        if lbl_id.startswith("nav-"):
-            slug = lbl_id[4:]
-            tab_name = self._SLUG_TO_TAB.get(slug, slug.upper())
-            self._activate_nav(tab_name)
-            self._render_tab(tab_name)
+        """Clear call-log selection on clicks outside a log row."""
+        if self._current_tab not in self._LOG_VIEWS:
             return
-
-        # OPS: click outside a log row clears selection
-        if self._current_tab != "OPS":
-            return
-        w = widget
+        w = getattr(event, "widget", None)
         while w is not None:
             if isinstance(w, LogRow):
                 return
@@ -531,83 +495,77 @@ class CostTrackerApp(App):
         if self._selected_row != -1:
             self._set_selected_row(-1)
 
-    def action_go_hud(self) -> None:
-        """Return to the HUD from any drill-down tab."""
-        self._render_hud()
+    def action_board(self) -> None:
+        """Return to the board from any fullscreen panel."""
+        self._render_board()
 
-    def _render_hud(self) -> None:
-        """Render the dense HUD as the active view."""
-        self._current_tab = HUD
-        # Clear nav highlights — HUD has no sidebar entry
-        for lbl in self.query(".nav-button"):
-            lbl.remove_class("active")
+    def _render_board(self) -> None:
+        """Render the dense board as the active view."""
+        self._current_tab = BOARD
         container = self.query_one("#panel-container", Vertical)
         container.remove_children()
         container.mount(self._build_hud())
         self._apply_hud_density()
 
-    def action_tab(self, tab_name: str) -> None:
-        self._activate_nav(tab_name)
-        self._render_tab(tab_name)
+    _PANEL_BUILDERS = {
+        "TREND":   "_build_trend",
+        "HEATMAP": "_build_heatmap",
+        "LOG":     "_build_log_view",
+        "CALLS":   "_build_cost_histogram",
+    }
 
-    def _render_tab(self, tab_name: str) -> None:
-        self._current_tab = tab_name
-        builders = {
-            "OVERVIEW":  self._build_overview,
-            "RECENT":    self._build_recent,
-            "OPS":       self._build_ops,
-            "TREND":     self._build_trend,
-            "CALENDAR":  self._build_calendar_heatmap,
-            "HEATMAP":   self._build_heatmap,
-            "CALLS":     self._build_cost_histogram,
-        }
+    def action_expand(self, panel: str) -> None:
+        """Expand one panel to fullscreen."""
+        if panel not in self._PANEL_BUILDERS:
+            return
+        self._render_panel(panel)
+
+    def _render_panel(self, panel: str) -> None:
+        self._current_tab = panel
+        builder = getattr(self, self._PANEL_BUILDERS[panel])
         container = self.query_one("#panel-container", Vertical)
         container.remove_children()
-        container.mount(builders[tab_name]())
+        container.mount(builder())
+
+    def _build_log_view(self) -> Widget:
+        """Fullscreen call log."""
+        entries = self._ops_entries_cache
+        return Vertical(
+            self._build_log_panel(entries),
+            classes="chart-panel chart-stack",
+        )
 
     def action_toggle_hourly_metric(self) -> None:
-        """Cycle OPS hourly bar between cost / tokens / requests.
+        """Cycle the board hourly bar between cost / tokens / requests.
 
-        No-op outside OPS. Sticky for the session.
+        No-op off the board. Sticky for the session.
         """
-        if self._current_tab != "OPS":
+        if self._current_tab != BOARD:
             return
-        cycle = {"cost": "tokens", "tokens": "requests", "requests": "cost"}
-        self._hourly_metric = cycle[self._hourly_metric]
-        self._render_tab("OPS")
+        self._hourly_metric = HOURLY_CYCLE[self._hourly_metric]
+        self._render_board()
+
 
     def action_toggle_metric(self) -> None:
-        """Unified m-key metric toggle — dispatches by current tab.
+        """Unified m-key metric toggle.
 
-        RECENT:   cost → requests → tokens → cost
-        TREND:    cost → tokens_io → tokens_cache → savings → cost
-        CALENDAR: cost ↔ requests
-        HEATMAP:  cost → requests → tokens → cost
-        No-op on tabs without a metric toggle.
+        Board: cycles the trend metric (headline chart).
+        TREND fullscreen: cost → tokens_io → tokens_cache → savings → cost
+        HEATMAP fullscreen: cost → requests → tokens → cost
+        No-op on LOG / CALLS.
         """
         tab = self._current_tab
-        if tab == "RECENT":
-            cycle = {"cost": "requests", "requests": "tokens", "tokens": "cost"}
-            self._recent_metric = cycle[self._recent_metric]
-            self._render_tab("RECENT")
-        elif tab == "TREND":
-            cycle = {
-                "cost": "tokens_io",
-                "tokens_io": "tokens_cache",
-                "tokens_cache": "savings",
-                "savings": "cost",
-            }
-            self._trend_metric = cycle[self._trend_metric]
-            self._render_tab("TREND")
-        elif tab == "CALENDAR":
-            self._calendar_metric = (
-                "requests" if self._calendar_metric == "cost" else "cost"
-            )
-            self._render_tab("CALENDAR")
+        if tab in (BOARD, "TREND"):
+            self._trend_metric = TREND_CYCLE[self._trend_metric]
+            if tab == "TREND":
+                self._render_panel("TREND")
+            else:
+                self._render_board()
         elif tab == "HEATMAP":
-            cycle = {"cost": "requests", "requests": "tokens", "tokens": "cost"}
-            self._heatmap_metric = cycle[self._heatmap_metric]
-            self._render_tab("HEATMAP")
+            self._heatmap_metric = HEATMAP_CYCLE[self._heatmap_metric]
+            self._render_panel("HEATMAP")
+
+
 
     @staticmethod
     def _init_plt(plot: PlotextPlot):
@@ -633,8 +591,13 @@ class CostTrackerApp(App):
     @staticmethod
     def _set_date_xticks(plt, sorted_days: list[str], dates: list[int],
                          max_ticks: int = 10) -> None:
+        if not sorted_days or not dates:
+            return
+        # When there are fewer days than ticks, emit one tick per day so the
+        # axis still renders labels (an empty tick list makes plotext drop
+        # the whole x-axis row — that's what blanked the daily-cost x-axis).
         tick_step = max(1, len(sorted_days) // max_ticks)
-        tick_positions = dates[::tick_step]
+        tick_positions = dates[::tick_step] or list(dates)
         tick_labels = [sorted_days[i][5:] for i in tick_positions]
         plt.xticks(tick_positions, tick_labels)
 
@@ -707,12 +670,14 @@ class CostTrackerApp(App):
     # only when daily_signature changes (same gate as the TREND tab).
 
     def _build_hud_kpi_cell(self, label: str, accent: str,
-                             value_selector, detail_selector) -> Vertical:
-        """Compact 3-row KPI cell for the HUD strip — no sparkline."""
+                             value_selector, detail_selector,
+                             spark_selector=None) -> Vertical:
+        """Compact KPI cell for the board strip: label · value · detail,
+        plus a 1-row sparkline when a `spark_selector` is given."""
         cls = "hud-kpi-cell"
         if accent:
             cls += f" hud-kpi-cell-{accent}"
-        return Vertical(
+        children: list[Widget] = [
             Label(f" [#9999CC]{label}[/]",
                   classes="hud-kpi-label", markup=True),
             LiveLabel(
@@ -725,8 +690,13 @@ class CostTrackerApp(App):
                 lambda s: f" [dim]{detail_selector(s)}[/]",
                 classes="hud-kpi-detail",
             ),
-            classes=cls,
-        )
+        ]
+        if spark_selector is not None:
+            children.append(LiveSparkline(
+                self._metrics, spark_selector, summary_function=max,
+                classes="hud-kpi-spark",
+            ))
+        return Vertical(*children, classes=cls)
 
     def _build_hud(self) -> Widget:
         """Dense HUD: KPI strip + charts + hourly + ranking + call log."""
@@ -741,16 +711,19 @@ class CostTrackerApp(App):
                 "TODAY", "",
                 value_selector=lambda s: format_cost(m(s).today_cost),
                 detail_selector=lambda s: f"{m(s).today_requests:,} req",
+                spark_selector=lambda s: m(s).spark_7d_cost,
             ),
             self._build_hud_kpi_cell(
                 "WEEK", "alt",
                 value_selector=lambda s: format_cost(m(s).this_week_cost),
                 detail_selector=lambda s: m(s).wow_detail,
+                spark_selector=lambda s: m(s).spark_4w,
             ),
             self._build_hud_kpi_cell(
                 "30-DAY", "accent",
                 value_selector=lambda s: format_cost(m(s).month_cost),
                 detail_selector=lambda s: f"{format_number(m(s).month_requests)} req",
+                spark_selector=lambda s: m(s).spark_30d_cost,
             ),
             self._build_hud_kpi_cell(
                 "TOKENS 7d", "",
@@ -759,11 +732,13 @@ class CostTrackerApp(App):
                     f"{format_tokens(m(s).tokens_7d_in)} in · "
                     f"{format_tokens(m(s).tokens_7d_out)} out"
                 ),
+                spark_selector=lambda s: m(s).spark_7d_tokens,
             ),
             self._build_hud_kpi_cell(
                 "CACHE", "alt",
                 value_selector=lambda s: m(s).cache_eff_label,
                 detail_selector=lambda s: f"saved {format_cost(m(s).cache_savings_30d)} 30d",
+                spark_selector=lambda s: m(s).spark_7d_cache,
             ),
             self._build_hud_kpi_cell(
                 "BURN", "accent",
@@ -772,6 +747,7 @@ class CostTrackerApp(App):
                     f"{format_cost(ops(s).today_cost)} today · "
                     f"{format_cost(ops(s).rate_per_hr)}/hr"
                 ),
+                spark_selector=lambda s: m(s).spark_burn,
             ),
             id="hud-kpi-strip",
         )
@@ -802,19 +778,24 @@ class CostTrackerApp(App):
                 trend_plot.refresh()
 
             trend_plot.call_after_refresh(on_mount_trend)
+            # Title/subtitle live on the border, not as Label rows, so the
+            # plot canvas keeps the rows plotext needs to render the x-axis
+            # date labels (it drops that row first under height pressure).
             trend_widget = Vertical(
-                Label("  DAILY COST — 30d", classes="chart-title"),
-                Label(f"  {trend_subtitle}", classes="chart-subtitle"),
                 trend_plot,
                 classes="chart-panel",
                 id="hud-trend",
             )
+            trend_widget.border_title = "◖ DAILY COST — 30d ◗"
+            trend_widget.border_subtitle = trend_subtitle
         else:
             trend_widget = Vertical(
                 Label("  No data", classes="chart-title"),
                 classes="chart-panel",
                 id="hud-trend",
             )
+            trend_widget.border_title = "◖ DAILY COST — 30d ◗"
+
 
         # Heatmap: cost by hour × weekday (all-time, fixed)
         hm_grid = self._get_hm_grid("cost")
@@ -829,13 +810,13 @@ class CostTrackerApp(App):
             color_high=_chigh,
         )
         heatmap_panel = Vertical(
-            Label("  COST BY HOUR × WEEKDAY", classes="chart-title"),
-            Label("  [dim]\\[6] full heatmap[/]", classes="chart-subtitle",
-                  markup=True),
             heatmap_widget,
             classes="chart-panel",
             id="hud-heatmap",
         )
+        heatmap_panel.border_title = "◖ COST BY HOUR × WEEKDAY ◗"
+        heatmap_panel.border_subtitle = "[6] full heatmap"
+
 
         mid_tier = Horizontal(trend_widget, heatmap_panel, id="hud-mid")
 
@@ -862,69 +843,8 @@ class CostTrackerApp(App):
 
         return Vertical(*children, classes="chart-panel chart-stack")
 
-    # ── Overview tab ──
-
-    def _build_overview(self) -> Widget:
-        """OVERVIEW stats row — every value binds to the snapshot.
-
-        Minute ticks and new-entry ticks both produce a new snapshot; the
-        LiveStatBox children re-render in place.
-        """
-        m = lambda snap: snap.overview  # noqa: E731
-
-        stats_row = Horizontal(
-            LiveStatBox(
-                self._metrics, "TODAY",
-                value_selector=lambda s: format_cost(m(s).today_cost),
-                detail_selector=lambda s: f"{m(s).today_requests:,} requests",
-                spark_selector=lambda s: m(s).spark_7d_cost,
-                spark_label="7d cost ▸", classes="stat-box",
-            ),
-            LiveStatBox(
-                self._metrics, "THIS WEEK",
-                value_selector=lambda s: format_cost(m(s).this_week_cost),
-                detail_selector=lambda s: m(s).wow_detail,
-                spark_selector=lambda s: m(s).spark_4w,
-                spark_label="4wk weekly ▸", classes="stat-box",
-            ),
-            LiveStatBox(
-                self._metrics, "30-DAY",
-                value_selector=lambda s: format_cost(m(s).month_cost),
-                detail_selector=lambda s: f"{format_number(m(s).month_requests)} requests",
-                spark_selector=lambda s: m(s).spark_30d_cost,
-                spark_label="30d daily ▸", classes="stat-box",
-            ),
-            LiveStatBox(
-                self._metrics, "TOKENS (7d)",
-                value_selector=lambda s: format_tokens(m(s).tokens_7d_total),
-                detail_selector=lambda s: (
-                    f"{format_cost(m(s).cost_per_1k_out_7d)}/1K out · "
-                    f"{format_tokens(m(s).tokens_7d_in)} in / "
-                    f"{format_tokens(m(s).tokens_7d_out)} out"
-                ),
-                spark_selector=lambda s: m(s).spark_7d_tokens,
-                spark_label="7d tokens ▸", classes="stat-box",
-            ),
-            LiveStatBox(
-                self._metrics, "CACHE HIT",
-                value_selector=lambda s: format_cost(m(s).cache_savings_30d),
-                detail_selector=lambda s: m(s).cache_eff_label,
-                spark_selector=lambda s: m(s).spark_7d_cache,
-                spark_label="7d efficiency ▸", classes="stat-box",
-            ),
-            LiveStatBox(
-                self._metrics, "BURN RATE",
-                value_selector=lambda s: f"{format_cost(m(s).burn_rate)}/day",
-                detail_selector=lambda s: "7-day rolling avg",
-                spark_selector=lambda s: m(s).spark_burn,
-                spark_label="30d avg ▸", classes="stat-box",
-            ),
-            id="overview-panel",
-        )
-
-        return Vertical(stats_row, classes="chart-panel")
-
     # ── TREND tab ───────────────────────────────────────────────────────
+
     #
     # Daily time-series. `m` cycles four views:
     #   cost       — 60d line chart of daily spend
@@ -934,13 +854,8 @@ class CostTrackerApp(App):
 
     def _build_trend(self) -> Widget:
         metric = self._trend_metric
-        _cycle = {
-            "cost": "tokens_io",
-            "tokens_io": "tokens_cache",
-            "tokens_cache": "savings",
-            "savings": "cost",
-        }
-        next_m = _cycle[metric]
+        next_m = TREND_CYCLE[metric]
+
 
         if metric == "cost":
             sorted_days = sorted(self._daily.keys())[-60:]
@@ -1049,123 +964,6 @@ class CostTrackerApp(App):
 
         return self._make_chart(title, draw_fn, subtitle)
 
-    # ── Calendar heatmap (GitHub-style, with metric toggle) ──
-    #
-    # Originally CALENDAR (cost) and REQUESTS (count) were separate tabs
-    # despite identical layouts. They're now one tab with `m` to cycle
-    # metric. Cost stays amber so the default look is unchanged; requests
-    # render in periwinkle to match the rest of the app's "count" palette.
-
-    CALENDAR_WEEKS = 5
-
-    # Metric → (title, color_low, color_high, value_formatter, peak_formatter)
-    _CALENDAR_METRICS = {
-        "cost": (
-            "CALENDAR HEATMAP — DAILY COST (last month)",
-            (60, 30, 0), (255, 153, 0),
-            FIELD_COST, format_cost, "Total",
-        ),
-        "requests": (
-            "CALENDAR HEATMAP — DAILY REQUESTS (last month)",
-            (40, 30, 70), (180, 180, 240),
-            FIELD_REQUESTS, lambda v: f"{int(v):,}", "Total",
-        ),
-    }
-
-    @staticmethod
-    def _build_weeks_grid(daily_values: Dict[str, float], num_weeks: int = CALENDAR_WEEKS):
-        """Build a 7-row × N-col grid ending on the week of today."""
-        today = datetime.now()
-        grid_end = today + timedelta(days=(6 - today.weekday()))
-        grid_start = grid_end - timedelta(days=(num_weeks - 1) * 7 + 6)
-
-        grid = [[0.0] * num_weeks for _ in range(7)]
-        for w in range(num_weeks):
-            for d in range(7):
-                date = grid_start + timedelta(days=w * 7 + d)
-                date_str = date.strftime("%Y-%m-%d")
-                if date_str in daily_values:
-                    grid[d][w] = daily_values[date_str]
-
-        month_ticks = []
-        month_labels = []
-        for w in range(num_weeks):
-            date = grid_start + timedelta(days=w * 7)
-            if date.day <= 7:
-                month_ticks.append(w)
-                month_labels.append(date.strftime("%b"))
-
-        return grid, month_ticks, month_labels, grid_start, grid_end
-
-    def _build_calendar_heatmap(self) -> Widget:
-        title, color_low, color_high, field, fmt, total_label = (
-            self._CALENDAR_METRICS[self._calendar_metric]
-        )
-        by_date = {d: float(self._daily[d][field]) for d in self._daily}
-        grid, month_ticks, month_labels, grid_start, grid_end = (
-            self._build_weeks_grid(by_date)
-        )
-
-        active_days = sum(1 for v in by_date.values() if v > 0)
-        total_v = sum(by_date.values())
-        peak_day = max(by_date, key=by_date.get) if by_date else None
-        peak_v = by_date[peak_day] if peak_day else 0
-
-        x_labels = list(zip(month_ticks, month_labels)) if month_ticks else []
-        cal_key = f"calendar_{self._calendar_metric}"
-        _czero, _clow, _chigh = HM_COLORS.get(cal_key, HM_COLORS["cost"])
-        heatmap = HeatmapGrid(
-            grid,
-            y_labels=DAY_NAMES,
-            x_labels=x_labels,
-            color_zero=_czero,
-            color_low=_clow,
-            color_high=_chigh,
-        )
-
-        # Metric-toggle hint lives in the subtitle so users can discover
-        # the feature. Bracketed key matches the keybinding convention.
-        other = "requests" if self._calendar_metric == "cost" else "cost"
-        subtitle = (
-            f"{grid_start.strftime('%Y-%m-%d')} → "
-            f"{grid_end.strftime('%Y-%m-%d')}  ◥  "
-            f"{active_days} active days  ◥  "
-            f"{total_label}: {fmt(total_v)}  ◥  "
-            f"Peak: {fmt(peak_v)}  ◥  "
-            f"[dim]\\[m] toggle to {other}[/]"
-        )
-
-        # Daily bar chart for the same window — higher-resolution read of
-        # the same data. Sorted days within the grid window only.
-        grid_start_str = grid_start.strftime("%Y-%m-%d")
-        grid_end_str = grid_end.strftime("%Y-%m-%d")
-        sorted_days = sorted(
-            d for d in by_date if grid_start_str <= d <= grid_end_str
-        )
-        if sorted_days:
-            bar_values = [by_date.get(d, 0.0) for d in sorted_days]
-            bar_labels = [d[5:] for d in sorted_days]  # MM-DD
-
-            if self._calendar_metric == "cost":
-                bar_color = (255, 153, 0)
-                ytick_fmt = format_cost
-            else:
-                bar_color = (180, 180, 240)
-                ytick_fmt = lambda v: f"{int(v):,}"  # noqa: E731
-
-            def draw_bar(plt):
-                plt.bar(bar_labels, bar_values, color=bar_color)
-                self._set_yticks(plt, bar_values, ytick_fmt)
-
-            bar_chart = self._make_chart("DAILY DETAIL", draw_bar)
-        else:
-            bar_chart = None
-
-        heatmap_panel = self._chart_panel(title, heatmap, subtitle)
-        if bar_chart is not None:
-            return Vertical(heatmap_panel, bar_chart, classes="chart-panel chart-stack")
-        return heatmap_panel
-
     # ── HEATMAP tab (hour × weekday, metric toggle) ──────────────────────
     #
     # Replaces the old COST MAP tab. `m` cycles cost → requests → tokens.
@@ -1175,8 +973,8 @@ class CostTrackerApp(App):
 
     def _build_heatmap(self) -> Widget:
         metric = self._heatmap_metric
-        _cycle = {"cost": "requests", "requests": "tokens", "tokens": "cost"}
-        next_m = _cycle[metric]
+        next_m = HEATMAP_CYCLE[metric]
+
 
         # Use memoized grid — avoids re-scanning the full ledger on metric toggle.
         grid = self._get_hm_grid(metric)
@@ -1405,130 +1203,12 @@ class CostTrackerApp(App):
             classes="chart-panel chart-stack",
         )
 
-    # ── RECENT tab ──────────────────────────────────────────────────────
-    #
-    # OPS shows "today since midnight"; RECENT shows the rolling-12h window
-    # at 15-minute granularity. One bar chart (metric toggled with `m`) plus
-    # a stat row (1h / 6h / 12h totals) and ranking panels.
-
-    def _build_recent(self) -> Widget:
-        snap = self._snapshot
-        if snap is None:
-            return Vertical(classes="chart-panel")
-        rv = snap.recent
-        now = snap.clock.now
-
-        # X-axis: label only on-the-hour buckets.
-        bucket_labels = [
-            t.strftime("%H:%M") if t.minute == 0 else ""
-            for t in rv.bucket_starts
-        ]
-
-        metric = self._recent_metric
-        _cycle = {"cost": "requests", "requests": "tokens", "tokens": "cost"}
-        next_m = _cycle[metric]
-
-        if metric == "cost":
-            def draw_fn(plt):
-                plt.bar(bucket_labels, rv.cost_series, color=(255, 153, 0))
-                self._set_yticks(plt, rv.cost_series, format_cost)
-            title = f"COST PER {RECENT_BUCKET_MIN}-MIN BUCKET ($)"
-            subtitle = (
-                f"12h: {format_cost(rv.cost_12h)}  ◥  "
-                f"peak: {format_cost(max(rv.cost_series, default=0))}  ◥  "
-                f"[dim]\\[m] → {next_m}[/]"
-            )
-        elif metric == "requests":
-            def draw_fn(plt):
-                plt.bar(bucket_labels, rv.request_series, color=(204, 102, 153))
-                self._set_yticks(
-                    plt, [float(v) for v in rv.request_series],
-                    lambda v: f"{int(v)}",
-                )
-            title = f"REQUESTS PER {RECENT_BUCKET_MIN}-MIN BUCKET"
-            subtitle = (
-                f"12h: {rv.requests_12h:,}  ◥  "
-                f"peak: {max(rv.request_series, default=0):,}  ◥  "
-                f"[dim]\\[m] → {next_m}[/]"
-            )
-        else:  # tokens
-            def draw_fn(plt):
-                plt.bar(bucket_labels, rv.token_series, color=(153, 153, 204))
-                self._set_yticks(
-                    plt, [float(v) for v in rv.token_series],
-                    lambda v: format_tokens(int(v), compact=True),
-                )
-            title = f"TOKENS PER {RECENT_BUCKET_MIN}-MIN BUCKET"
-            subtitle = (
-                f"12h: {format_tokens(rv.tokens_12h)}  ◥  "
-                f"peak: {format_tokens(max(rv.token_series, default=0))}  ◥  "
-                f"[dim]\\[m] → {next_m}[/]"
-            )
-
-        # Stat-band row: 1h / 6h / 12h, plus most-recent activity timestamp.
-        if rv.last_call_dt is None:
-            last_label = "no recent calls"
-        else:
-            age = now - rv.last_call_dt
-            mins = int(age.total_seconds() // 60)
-            if mins < 1:
-                last_label = "just now"
-            elif mins < 60:
-                last_label = f"{mins}m ago"
-            else:
-                last_label = f"{mins // 60}h{mins % 60:02d}m ago"
-
-        stat_row = Horizontal(
-            self._build_recent_stat(
-                "LAST 1h", "",
-                value=format_cost(rv.cost_1h),
-                detail=f"{rv.requests_1h:,} req · {format_tokens(rv.tokens_1h)} tok",
-            ),
-            self._build_recent_stat(
-                "LAST 6h", "alt",
-                value=format_cost(rv.cost_6h),
-                detail=f"{rv.requests_6h:,} req · {format_tokens(rv.tokens_6h)} tok",
-            ),
-            self._build_recent_stat(
-                "LAST 12h", "accent",
-                value=format_cost(rv.cost_12h),
-                detail=f"{rv.requests_12h:,} req · "
-                       f"{format_tokens(rv.tokens_12h)} tok",
-            ),
-            self._build_recent_stat(
-                "LATEST", "",
-                value=last_label,
-                detail=(rv.last_call_dt.strftime("%H:%M:%S")
-                        if rv.last_call_dt else "—"),
-            ),
-            classes="ops-stat-row",
-        )
-
-        recent_summary = Vertical(
-            stat_row,
-            classes="ops-panel ops-panel-session",
-        )
-        recent_summary.border_title = "◖ RECENT ACTIVITY ◗"
-        recent_summary.border_subtitle = (
-            f"rolling {RECENT_WINDOW_HOURS}h window · "
-            f"{RECENT_BUCKET_MIN}-min buckets"
-        )
-
-        chart = self._make_chart(title, draw_fn, subtitle)
-        ranking_panels = self._build_recent_ranking_panels(rv)
-
-        children: List[Widget] = [recent_summary, chart]
-        if ranking_panels is not None:
-            children.append(ranking_panels)
-        return Vertical(*children, classes="chart-panel chart-stack")
-
     def _build_recent_stat(self, label: str, accent: str,
                            value: str, detail: str) -> Vertical:
-        """Static stat cell for the RECENT summary row.
+        """Static stat cell for a stat-band row (used by the CALLS header).
 
-        Unlike the OPS cells, this isn't bound to LiveLabel — RECENT
-        rebuilds the whole tab on each tick (it's in `_CHART_TABS`), so a
-        plain string is fine and avoids re-subscribing 4 watchers per cell.
+        Not bound to LiveLabel — the histogram rebuilds on expand, so a
+        plain string is fine and avoids subscribing watchers per cell.
         """
         cls = "ops-stat-cell"
         if accent:
@@ -1543,48 +1223,7 @@ class CostTrackerApp(App):
             classes=cls,
         )
 
-    def _build_recent_ranking_panels(self, rv) -> Optional[Widget]:
-        """Side-by-side MODEL / PROJECT cost panels for the 12h window."""
-        panels: list[Widget] = []
-        if rv.model_cost_12h:
-            top = sorted(
-                rv.model_cost_12h.items(), key=lambda x: x[1], reverse=True,
-            )[:TOP_N_PANEL]
-            max_v = max((c for _, c in top), default=1) or 1
-            rows = [
-                self._panel_row(
-                    m, format_cost(c), c / max_v if max_v else 0, model_color(m),
-                )
-                for m, c in top
-            ]
-            panels.append(self._ranked_panel(
-                "MODEL MIX (12h)",
-                f"{len(rv.model_cost_12h)} models · "
-                f"{format_cost(rv.cost_12h)} total",
-                rows,
-            ))
-        if rv.project_cost_12h:
-            top = sorted(
-                rv.project_cost_12h.items(), key=lambda x: x[1], reverse=True,
-            )[:TOP_N_PANEL]
-            max_v = max((c for _, c in top), default=1) or 1
-            rows = [
-                self._panel_row(
-                    p, format_cost(c), c / max_v if max_v else 0, "#FF9900",
-                )
-                for p, c in top
-            ]
-            panels.append(self._ranked_panel(
-                "PROJECTS (12h)",
-                f"{len(rv.project_cost_12h)} active",
-                rows,
-            ))
-        if not panels:
-            return None
-        return Horizontal(*panels, classes="ops-side-by-side")
-
-    # ── OPS tab ──
-
+    # ── Call log refresh ──
 
     def _refresh_log_rows(self) -> None:
         """Re-render OPS call-log rows from the current snapshot.
@@ -1606,7 +1245,7 @@ class CostTrackerApp(App):
         )
         specs = build_row_specs(entries, max_log_cost)
         if len(specs) != len(self._ops_row_specs):
-            self._render_tab("OPS")
+            self._rerender_current()
             return
         self._ops_row_specs = specs
         try:
@@ -1614,8 +1253,9 @@ class CostTrackerApp(App):
         except Exception:
             return
         if len(rows) != len(specs):
-            self._render_tab("OPS")
+            self._rerender_current()
             return
+
         for idx, (row, spec) in enumerate(zip(rows, specs)):
             columns, row_class = self._render_row_spec(
                 spec, selected=(idx == self._selected_row),
@@ -1623,104 +1263,10 @@ class CostTrackerApp(App):
             row.update(columns)
             row.set_classes(row_class)
 
-    def _build_ops(self) -> Widget:
-        """Build the full OPS tab.
-
-        Session-panel cells, hourly bar, and border subtitles all bind to
-        the current snapshot through Live widgets — no OpsRefs, no hand-
-        rolled in-place update. Ranking panels and the call log still
-        rebuild on tab render, since their row set is structurally
-        variable.
-        """
-        snap = self._snapshot
-        if snap is None:
-            return Vertical(classes="chart-panel")
-
-        children: list[Widget] = [self._build_session_panel()]
-        ranking_row = self._build_ranking_panels(snap.ops)
-        if ranking_row is not None:
-            children.append(ranking_row)
-        children.append(self._build_log_panel(snap.ops_entries))
-
-        return Vertical(*children, classes="chart-panel chart-stack")
-
-    # ── OPS panel builders ──
-
-    def _build_live_stat_cell(self, label: str, accent: str,
-                              value_selector, detail_selector) -> Vertical:
-        """One big stat cell bound to snapshot selectors."""
-        cls = "ops-stat-cell"
-        if accent:
-            cls += f" ops-stat-cell-{accent}"
-        return Vertical(
-            Label(f" [#9999CC]{label}[/]",
-                  classes="ops-stat-cell-label", markup=True),
-            LiveLabel(
-                self._metrics,
-                lambda s: f" [#FF9900]{value_selector(s)}[/]",
-                classes="ops-stat-cell-value",
-            ),
-            LiveLabel(
-                self._metrics,
-                lambda s: f" [dim]{detail_selector(s)}[/]",
-                classes="ops-stat-cell-detail",
-            ),
-            classes=cls,
-        )
-
-    def _build_session_panel(self) -> Widget:
-        """Top SESSION STATS panel — 5 live stat cells over the hourly bar."""
-        ops = lambda snap: snap.ops         # noqa: E731
-        stats = lambda snap: snap.ops.stats  # noqa: E731
-
-        session_row = Horizontal(
-            self._build_live_stat_cell(
-                "CALLS", "",
-                value_selector=lambda s: f"{stats(s)['count']:,}",
-                detail_selector=lambda s: f"{stats(s)['subagent_count']:,} subagent",
-            ),
-            self._build_live_stat_cell(
-                "COST", "alt",
-                value_selector=lambda s: format_cost(ops(s).today_cost),
-                detail_selector=lambda s: f"{format_cost(ops(s).rate_per_hr)}/hr",
-            ),
-            self._build_live_stat_cell(
-                "CACHE", "accent",
-                value_selector=lambda s: f"{ops(s).cache_eff:.0f}%",
-                detail_selector=lambda s: f"saved {format_cost(stats(s)['savings'])}",
-            ),
-            self._build_live_stat_cell(
-                "TOKENS", "alt",
-                value_selector=lambda s: format_tokens(
-                    stats(s)['tokens_in'] + stats(s)['tokens_out']
-                ),
-                detail_selector=lambda s: (
-                    f"{format_tokens(stats(s)['tokens_in'])} in · "
-                    f"{format_tokens(stats(s)['tokens_out'])} out"
-                ),
-            ),
-            self._build_live_stat_cell(
-                "PER-CALL", "",
-                value_selector=lambda s: format_cost(ops(s).median_cost),
-                detail_selector=lambda s: (
-                    f"P95 {format_cost(ops(s).p95_cost)} · "
-                    f"med {format_tokens(ops(s).median_tokens)} tok"
-                ),
-            ),
-            classes="ops-stat-row",
-        )
-
-        hourly_wrap = self._build_hourly_wrap()
-
-        session_panel = Vertical(
-            session_row, hourly_wrap,
-            classes="ops-panel ops-panel-session",
-        )
-        session_panel.border_title = "◖ SESSION STATS ◗"
-        session_panel.border_subtitle = "today"
-        return session_panel
+    # ── Board panel builders ──
 
     # Hourly-bar metric → (selector, subtitle_fn, title_suffix)
+
     _HOURLY_METRICS = {
         "cost":     (lambda s: s.ops.hour_cost,
                      lambda s: f"cost/hr · today {format_cost(s.ops.today_cost)}",
@@ -1740,8 +1286,8 @@ class CostTrackerApp(App):
         """
         metric = self._hourly_metric
         selector, subtitle_fn, suffix = self._HOURLY_METRICS[metric]
-        other_cycle = {"cost": "tokens", "tokens": "requests", "requests": "cost"}
-        next_metric = other_cycle[metric]
+        next_metric = HOURLY_CYCLE[metric]
+
 
         spark = LiveHourlyBar(
             self._metrics,
