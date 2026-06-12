@@ -131,27 +131,26 @@ Entries with no configured rates are skipped and their stored cost is preserved.
 
 Launch with `lcost` (the default mode).
 
-### Tabs
+### Board
 
-Number keys `1`–`7` switch tabs. The layout groups them by purpose:
+The dashboard is a single dense board (btop-style): a KPI strip, a daily-cost
+trend chart beside an hour × weekday heatmap, a 24-hour activity bar, ranking
+panels, and the call log — all at once. Number keys expand one panel to
+fullscreen; `Esc` (or `0`) returns to the board.
 
-| Key | Tab | Contents |
+| Key | Expands | Contents |
 |---|---|---|
-| | **Live — what's happening now** | |
-| `1` | OVERVIEW | Today vs a normal day — cost / tokens / requests with % deltas + per-model mix. `m` cycles the baseline (week / month / all-time) |
-| `2` | RECENT | Rolling-12h window: cost / requests / tokens at 15-min granularity. `m` cycles the metric |
-| `3` | OPS | Today's session stats, project breakdown, model mix, call log. `h` cycles the hourly-bar metric |
-| | **Trends — how am I trending over weeks** | |
-| `4` | TREND | Daily time-series. `m` cycles cost / tokens I-O / cache tokens / savings |
-| | **Patterns — when do I work** | |
-| `5` | CALENDAR | Last-month heatmap + daily bar; `m` toggles cost / requests |
-| `6` | HEATMAP | Hour × weekday heatmap; `m` cycles cost / requests / tokens |
-| | **Distribution** | |
-| `7` | CALLS | Per-call cost distribution histogram |
+| `1` | TREND | Daily time-series. `m` cycles cost / tokens I-O / cache tokens / savings |
+| `2` | HEATMAP | Hour × weekday heatmap. `m` cycles cost / requests / tokens |
+| `3` | LOG | Full call log: 100 most recent calls. `j`/`k` to move, `enter` for detail |
+| `4` | CALLS | Per-call cost distribution histogram |
 
-### OPS tab
+On the board, `m` cycles the trend panel's metric and `h` cycles the hourly
+bar (cost / tokens / requests). `]` / `[` cycle between the fullscreen panels.
 
-The OPS tab shows today's session activity:
+### Board contents
+
+The board always shows today's session activity:
 
 - **Session stats** — calls, cost, $/hr rate, cache efficiency, token totals
 - **Per-call distribution** — median, P95, max call cost
@@ -174,12 +173,14 @@ New entries from auto-refresh are flagged with `★` and shown in bold. Subagent
 | `J` / `K` | Scroll ten lines |
 | `ctrl+d` / `ctrl+u` | Page down / up |
 | `g` / `G` | Jump to top / bottom |
-| `]` / `[` | Next / previous tab |
-| `enter` | Expand most recent call (modal with full details) |
+| `1`–`4` | Expand a panel fullscreen (TREND / HEATMAP / LOG / CALLS) |
+| `0` / `esc` | Return to the board |
+| `]` / `[` | Next / previous fullscreen panel |
+| `enter` | Expand selected call (modal with full details) |
+| `m` | Cycle metric — board: trend chart; fullscreen: that panel (TREND / HEATMAP) |
+| `h` | Cycle hourly-bar metric: cost / tokens / requests |
 | `ctrl+c` | Quit |
-| `1`–`7` | Switch tabs directly |
-| `m` | Cycle the active tab's metric/baseline (OVERVIEW, RECENT, TREND, CALENDAR, HEATMAP) |
-| `h` | (OPS) cycle hourly-bar metric: cost / tokens / requests |
+
 
 The status bar shows entry count, active days, refresh state, and a `+N new` badge when auto-refresh finds new entries.
 
