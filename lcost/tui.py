@@ -276,8 +276,8 @@ class CostTrackerApp(App):
             # Bound to the snapshot so it rolls over with the clock.
             yield LiveStatic(
                 self._metrics,
-                lambda s: s.clock.now.strftime("%m·%V·%d"),
-                placeholder=datetime.now().strftime("%m·%V·%d"),
+                lambda s: s.clock.now.strftime("%Y-%m-%d (W%V)"),
+                placeholder=datetime.now().strftime("%Y-%m-%d (W%V)"),
                 id="top-elbow",
             )
             yield Static("lcost", id="top-title")
