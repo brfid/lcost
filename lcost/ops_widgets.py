@@ -24,6 +24,7 @@ from .formatters import (
     FIELD_COST,
     FIELD_TOKENS_IN,
     FIELD_TOKENS_OUT,
+    format_cost,
 )
 
 
@@ -368,7 +369,7 @@ class HelpScreen(ModalScreen):
         "BOARD": (
             "BOARD",
             "  [b]1–4    [/b] Expand a panel fullscreen\n"
-            "  [b]m      [/b] Cycle trend metric (cost / tokens / cache / savings)\n"
+            "  [b]m      [/b] Switch board price / tokens\n"
             "  [b]h      [/b] Cycle hourly bar (cost / tokens / requests)\n"
             "  [b]j / k  [/b] Move call-log selection · [b]enter[/b] detail",
         ),
@@ -458,12 +459,12 @@ class EntryDetailScreen(ModalScreen):
             f"Subagent: {'yes' if e.get('isSubagent') else 'no'}",
             f"Stop:     {e.get('stopReason') or '—'}",
             "",
-            f"Tokens:   in={e.get(FIELD_TOKENS_IN, 0):,}  "
-            f"out={e.get(FIELD_TOKENS_OUT, 0):,}  "
-            f"cache_w={e.get(FIELD_CACHE_WRITES, 0):,}  "
-            f"cache_r={e.get(FIELD_CACHE_READS, 0):,}",
-            f"Cost:     ${e.get(FIELD_COST, 0):.4f}  "
-            f"(saved ${e.get(FIELD_CACHE_SAVINGS, 0):.4f})",
+            f"Tokens:   in={e.get(FIELD_TOKENS_IN) or 0:,}  "
+            f"out={e.get(FIELD_TOKENS_OUT) or 0:,}  "
+            f"cache_w={e.get(FIELD_CACHE_WRITES) or 0:,}  "
+            f"cache_r={e.get(FIELD_CACHE_READS) or 0:,}",
+            f"Cost:     {format_cost(e.get(FIELD_COST))}  "
+            f"(saved {format_cost(e.get(FIELD_CACHE_SAVINGS))})",
             "",
             "[b]Prompt preview:[/b]",
             preview,
@@ -605,4 +606,3 @@ class LiveSparkline(Sparkline):
             return
         if values and any(v > 0 for v in values):
             self.data = values
-

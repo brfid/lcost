@@ -1,6 +1,6 @@
 # lcost
 
-Tracks LLM API spend across Claude Code and Cline. Reads session files written by each tool, deduplicates against a local ledger, and reports cost and token breakdowns across multiple providers (Anthropic, OpenAI, Amazon Bedrock, Google, Meta, Mistral).
+Tracks local query usage and token-rate estimates across Claude Code, Cline, and Codex / ChatGPT. Reads session files written by each tool, deduplicates against a local ledger, and reports token and price breakdowns across multiple providers (Anthropic, OpenAI, Amazon Bedrock, Google, Meta, Mistral).
 
 ## Prerequisites
 
@@ -8,6 +8,7 @@ Tracks LLM API spend across Claude Code and Cline. Reads session files written b
 - At least one supported source:
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (CLI)
   - [Cline](https://github.com/cline/cline) (VS Code extension)
+  - Codex / ChatGPT (VS Code extension or CLI)
 
 For the interactive dashboard:
 
@@ -76,6 +77,7 @@ lcost --report --from 2026-04-01 --to 2026-04-30    # Specific range
 ```bash
 lcost --source cline         # Cline only
 lcost --source claude-code   # Claude Code only
+lcost --source codex         # Codex / ChatGPT only
 ```
 
 ### Filter by project
@@ -93,7 +95,9 @@ lcost --project dotfiles --days 60
 lcost --stats
 ```
 
-Prints file size, entry counts by source, date range, top projects, last ingest time, and backup count.
+Prints file size, entry counts by source, date range, top projects, backup
+count, and per-source scan health (last success, records seen, and records
+added).
 
 ### Control scanning behavior
 
@@ -133,10 +137,10 @@ Launch with `lcost` (the default mode).
 
 ### Board
 
-The dashboard is a single dense board (btop-style): a KPI strip, a daily-cost
-trend chart beside an hour × weekday heatmap, a 24-hour activity bar, ranking
-panels, and the call log — all at once. Number keys expand one panel to
-fullscreen; `Esc` (or `0`) returns to the board.
+The dashboard is a single dense board (btop-style): a KPI strip, a daily
+price-or-token trend chart beside an hour × weekday heatmap, a 24-hour
+activity bar, ranking panels, and the call log — all at once. Number keys
+expand one panel to fullscreen; `Esc` (or `0`) returns to the board.
 
 | Key | Expands | Contents |
 |---|---|---|
@@ -145,8 +149,11 @@ fullscreen; `Esc` (or `0`) returns to the board.
 | `3` | LOG | Full call log: 100 most recent calls. `j`/`k` to move, `enter` for detail |
 | `4` | CALLS | Per-call cost distribution histogram |
 
-On the board, `m` cycles the trend panel's metric and `h` cycles the hourly
-bar (cost / tokens / requests). `]` / `[` cycle between the fullscreen panels.
+On the board, `m` switches both the trend and heatmap between token price and
+tokens. The all-source strip directly below the KPIs shows today's Codex,
+Claude Code, and Cline values plus the most recent scan freshness. `h` cycles
+the hourly bar (cost / tokens / requests). `]` / `[` cycle between the
+fullscreen panels.
 
 ### Board contents
 
@@ -177,7 +184,7 @@ New entries from auto-refresh are flagged with `★` and shown in bold. Subagent
 | `0` / `esc` | Return to the board |
 | `]` / `[` | Next / previous fullscreen panel |
 | `enter` | Expand selected call (modal with full details) |
-| `m` | Cycle metric — board: trend chart; fullscreen: that panel (TREND / HEATMAP) |
+| `m` | Switch board price / tokens; fullscreen: cycle that panel's metric |
 | `h` | Cycle hourly-bar metric: cost / tokens / requests |
 | `ctrl+c` | Quit |
 
@@ -188,7 +195,7 @@ The status bar shows entry count, active days, refresh state, and a `+N new` bad
 
 On each run, lcost:
 
-1. Scans session data from Cline and Claude Code in parallel.
+1. Scans session data from Cline, Claude Code, and Codex / ChatGPT.
 2. Deduplicates entries against a local `ledger.json` by entry ID.
 3. Back-fills missing fields on existing entries (handles schema evolution).
 4. Reports cost and token breakdowns from the ledger.
@@ -217,6 +224,18 @@ Each ingested Claude Code call stores:
 - `promptPreview` — first 80 chars of the preceding user message (tool results excluded)
 - Token/cost fields: `tokensIn`, `tokensOut`, `cacheWrites`, `cacheReads`, `cost`, `cacheSavings`
 
+### Codex / ChatGPT entry fields
+
+Codex reads rollout JSONL from `$CODEX_HOME/sessions` and
+`$CODEX_HOME/archived_sessions` (default: `~/.codex/`). This includes the
+Codex VS Code extension's rollouts. It stores token-count observations and
+minimal session metadata only—never prompts, responses, tool payloads, or
+credentials.
+
+For each query, `tokensIn` excludes cache reads and cache writes; those
+numbers are recorded separately. Reasoning tokens are retained as metadata,
+but are not added again because they are already included in output tokens.
+
 ### Pricing
 
 Pricing is per model family, keyed off a single `FAMILIES` registry in `lcost/pricing.py`. Rates are USD per million tokens.
@@ -229,8 +248,18 @@ Pricing is per model family, keyed off a single `FAMILIES` registry in `lcost/pr
 | GPT-5 | 1.25 | 10.00 | 1.25 | 0.125 | [openai.com/pricing](https://openai.com/api/pricing) |
 | GPT-5 mini | 0.25 | 2.00 | 0.25 | 0.025 | [openai.com/pricing](https://openai.com/api/pricing) |
 | GPT-5 nano | 0.05 | 0.40 | 0.05 | 0.005 | [openai.com/pricing](https://openai.com/api/pricing) |
+| GPT-5.6 Luna | 0.20 | 1.20 | 0.25 | 0.02 | Configured Codex Bedrock rate |
+| GPT-5.6 Terra | 2.00 | 12.00 | 2.50 | 0.20 | Configured Codex Bedrock rate |
+| GPT-5.6 Sol | 4.00 | 20.00 | 5.00 | 0.40 | Configured Codex Bedrock rate |
 
-Cline costs come from the provider's inline per-call data and are stored as-is. Claude Code costs are computed from the table above. Use `--recalc` to recompute stored costs after a rate change; entries with no configured rates are skipped. Verify rates against each provider's pricing page if you suspect drift.
+Cline costs come from the provider's inline per-call data and are stored
+as-is. Claude Code and Codex costs are computed from the table above. Codex
+uses the active Bedrock model's token rate for a per-query estimate—lcost does
+not allocate ChatGPT or Codex subscription fees. Each new rate-card estimate
+retains a versioned `pricingRef` in the ledger. Use `--recalc` to recompute
+stored costs after a rate change; entries with no configured rates are
+skipped. Verify rates against each provider's pricing page if you suspect
+drift.
 
 ### Data safety
 
@@ -245,7 +274,7 @@ All files are stored in `~/.local/share/lcost/` by default (`$XDG_DATA_HOME/lcos
 | File | Description |
 |---|---|
 | `ledger.json` | All ingested API call records, keyed by unique entry ID |
-| `ingest_state.json` | Per-file byte offsets for incremental scanning (safe to delete) |
+| `ingest_state.json` | Per-file byte offsets plus source scan health (safe to delete) |
 | `backups/ledger-YYYY-MM-DD.json` | Daily ledger snapshots, last 7 retained |
 
 Pidfile and caches live in `~/.cache/lcost/` (`$XDG_CACHE_HOME/lcost/` if set).

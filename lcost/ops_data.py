@@ -8,7 +8,7 @@ trivially testable and reusable across tabs.
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 
 from .aggregation import entry_local_dt
 from .formatters import (
@@ -41,6 +41,16 @@ TOOL_ABBREV = {
 }
 
 
+@dataclass(frozen=True)
+class SourceToday:
+    """Today's aggregate for one source, excluding synthetic agent spawns."""
+
+    source: str
+    requests: int
+    tokens: int
+    cost: float
+
+
 # ── Entry filtering and sorting ───────────────────────────────────────────
 
 def collect_entries(ledger: Dict,
@@ -59,13 +69,77 @@ def collect_entries(ledger: Dict,
     return out
 
 
+def iter_individual_entries(ledger: Dict,
+                            source_filter: Optional[str] = None
+                            ) -> Iterator[Tuple[datetime, Dict]]:
+    """Yield displayable non-historical entries for heatmaps and charts."""
+    for entry_id, entry in ledger.items():
+        if entry_id.startswith("cline:historical:"):
+            continue
+        if source_filter and entry.get("source") != source_filter:
+            continue
+        try:
+            yield entry_local_dt(entry), entry
+        except (ValueError, KeyError):
+            continue
+
+
+def hour_week_grid(ledger: Dict, source_filter: Optional[str],
+                   metric: str) -> List[List[float]]:
+    """Aggregate individual entries into a 7×24 heatmap grid."""
+    grid = [[0.0] * 24 for _ in range(7)]
+    for dt, entry in iter_individual_entries(ledger, source_filter):
+        if metric == "cost":
+            value = entry.get(FIELD_COST) or 0
+        elif metric == "requests":
+            value = 1.0
+        else:
+            value = float(
+                (entry.get(FIELD_TOKENS_IN) or 0)
+                + (entry.get(FIELD_TOKENS_OUT) or 0)
+            )
+        grid[dt.weekday()][dt.hour] += value
+    return grid
+
+
+def source_today(entries: Sequence[Tuple], source_names: Sequence[str],
+                 now: Optional[datetime] = None) -> Tuple[SourceToday, ...]:
+    """Return today's price/token totals in stable source order."""
+    now = now or datetime.now()
+    today = now.date()
+    totals = {
+        source: {"requests": 0, "tokens": 0, "cost": 0.0}
+        for source in source_names
+    }
+    for dt, _, entry in entries:
+        source = entry.get("source")
+        if dt.date() != today or source not in totals or source == "agent_spawn":
+            continue
+        total = totals[source]
+        total["requests"] += 1
+        total["tokens"] += (
+            (entry.get(FIELD_TOKENS_IN) or 0)
+            + (entry.get(FIELD_TOKENS_OUT) or 0)
+        )
+        total["cost"] += entry.get(FIELD_COST) or 0
+    return tuple(
+        SourceToday(
+            source=source,
+            requests=totals[source]["requests"],
+            tokens=totals[source]["tokens"],
+            cost=totals[source]["cost"],
+        )
+        for source in source_names
+    )
+
+
 def hourly_cost_today(entries: List[Tuple]) -> List[float]:
     """Return 24 floats: today's cost per hour at index 0..23."""
     today = datetime.now().strftime("%Y-%m-%d")
     hours = [0.0] * 24
     for dt, _, e in entries:
         if dt.strftime("%Y-%m-%d") == today:
-            hours[dt.hour] += e.get(FIELD_COST, 0)
+            hours[dt.hour] += e.get(FIELD_COST) or 0
     return hours
 
 
@@ -76,7 +150,8 @@ def hourly_tokens_today(entries: List[Tuple]) -> List[float]:
     for dt, _, e in entries:
         if dt.strftime("%Y-%m-%d") == today:
             hours[dt.hour] += (
-                e.get(FIELD_TOKENS_IN, 0) + e.get(FIELD_TOKENS_OUT, 0)
+                (e.get(FIELD_TOKENS_IN) or 0)
+                + (e.get(FIELD_TOKENS_OUT) or 0)
             )
     return hours
 
@@ -129,12 +204,12 @@ def aggregate_today(entries: List[Tuple], short_project_fn,
             s["subagent_type_counts"][e.get("subagentType") or "(none)"] += 1
             s["spawn_count"] += 1
             continue
-        cost = e.get(FIELD_COST, 0)
+        cost = e.get(FIELD_COST) or 0
         s["count"] += 1
         s["cost"] += cost
-        s["tokens_in"] += e.get(FIELD_TOKENS_IN, 0)
-        s["tokens_out"] += e.get(FIELD_TOKENS_OUT, 0)
-        s["savings"] += e.get(FIELD_CACHE_SAVINGS, 0)
+        s["tokens_in"] += e.get(FIELD_TOKENS_IN) or 0
+        s["tokens_out"] += e.get(FIELD_TOKENS_OUT) or 0
+        s["savings"] += e.get(FIELD_CACHE_SAVINGS) or 0
         if cost > 0:
             s["costs"].append(cost)
         if e.get("isSubagent"):
@@ -163,7 +238,7 @@ def subagent_cost_rollup(entries: List[Tuple]) -> Dict[str, float]:
             continue
         parent = e.get("parentSession") or ""
         if parent:
-            out[parent] += e.get(FIELD_COST, 0)
+            out[parent] += e.get(FIELD_COST) or 0
     return dict(out)
 
 
@@ -389,8 +464,8 @@ def row_activity_text(entry: Dict) -> str:
     stop = entry.get("stopReason")
     if stop and stop != "end_turn":
         bits.append(f"stop={stop}")
-    cr = entry.get(FIELD_CACHE_READS, 0)
-    cw = entry.get(FIELD_CACHE_WRITES, 0)
+    cr = entry.get(FIELD_CACHE_READS) or 0
+    cw = entry.get(FIELD_CACHE_WRITES) or 0
     if cr or cw:
         bits.append(f"cache {format_number(cr)}r/{format_number(cw)}w")
     if entry.get("isSubagent"):
@@ -523,7 +598,8 @@ def derive_ops_view(entries: List[Tuple], stats: Dict,
     # Median tokens-per-call: collect today's in+out per entry, sort, pick mid.
     today_str = now.strftime("%Y-%m-%d")
     tok_per_call = sorted(
-        e.get(FIELD_TOKENS_IN, 0) + e.get(FIELD_TOKENS_OUT, 0)
+        (e.get(FIELD_TOKENS_IN) or 0)
+        + (e.get(FIELD_TOKENS_OUT) or 0)
         for dt, _, e in entries
         if dt.strftime("%Y-%m-%d") == today_str
         and e.get("source") != "agent_spawn"
@@ -543,4 +619,3 @@ def derive_ops_view(entries: List[Tuple], stats: Dict,
         hour_tokens=hourly_tokens_today(entries),
         hour_requests=hourly_requests_today(entries),
     )
-

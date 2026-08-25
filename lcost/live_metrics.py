@@ -30,6 +30,7 @@ from .formatters import (
     FIELD_REQUESTS,
     FIELD_TOKENS_IN,
     FIELD_TOKENS_OUT,
+    SOURCES,
     calculate_totals,
     init_field_dict,
 )
@@ -38,6 +39,8 @@ from .ops_data import (
     aggregate_today,
     collect_entries,
     derive_ops_view,
+    source_today,
+    SourceToday,
     short_model,
     short_project,
 )
@@ -199,10 +202,10 @@ class MetricsSnapshot:
     overview: OverviewMetrics
     ops: OpsView
     ops_entries: List                  # raw entries for OPS call-log rendering
-
-
     daily: Dict[str, Dict] = field(default_factory=dict)
     source_filter: Optional[str] = None
+    source_today: Tuple[SourceToday, ...] = ()
+    source_health: Dict[str, Dict] = field(default_factory=dict)
 
 
 def _daily_signature(daily: Dict[str, Dict]) -> Tuple:
@@ -227,13 +230,20 @@ def _daily_signature(daily: Dict[str, Dict]) -> Tuple:
 
 def compute_snapshot(ledger: Dict, daily: Dict[str, Dict],
                      source_filter: Optional[str],
-                     clock: Optional[ClockBucket] = None) -> MetricsSnapshot:
+                     clock: Optional[ClockBucket] = None,
+                     source_health: Optional[Dict[str, Dict]] = None,
+                     ) -> MetricsSnapshot:
     """Build a full `MetricsSnapshot` from raw inputs. Pure function."""
     clock = clock or ClockBucket.capture()
     entries = collect_entries(ledger, source_filter)
     stats = aggregate_today(entries, short_project, short_model)
     ops = derive_ops_view(entries, stats, now=clock.now)
     overview = _overview(daily, clock)
+    source_names = (
+        (source_filter,)
+        if source_filter
+        else tuple(source.short_name for source in SOURCES)
+    )
     return MetricsSnapshot(
         clock=clock,
         daily_signature=_daily_signature(daily),
@@ -241,9 +251,10 @@ def compute_snapshot(ledger: Dict, daily: Dict[str, Dict],
         overview=overview,
         ops=ops,
         ops_entries=entries,
-
         daily=daily,
         source_filter=source_filter,
+        source_today=source_today(entries, source_names, now=clock.now),
+        source_health=dict(source_health or {}),
     )
 
 

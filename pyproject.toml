@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "lcost"
 version = "0.2.0"
-description = "LLM API spend tracker for Claude Code and Cline (LCARS-style TUI)"
+description = "Local LLM token and query-cost tracker for Codex, Claude Code, and Cline"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.9"

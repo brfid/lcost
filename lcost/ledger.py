@@ -32,7 +32,15 @@ from .ingest_state import (
     stamp_ingest,
     update_file_state,
 )
-from .pricing import calculate_cache_savings, calculate_cost
+from .pricing import (
+    calculate_cache_savings,
+    calculate_cost,
+    pricing_reference_for_model,
+)
+from .usage import (
+    COST_PROVENANCE_RATE_CARD,
+    normalize_usage_entry,
+)
 
 BACKUP_RETAIN = 7
 
@@ -117,6 +125,7 @@ def ingest(ledger: Dict[str, Dict], new_entries: Dict[str, Dict]) -> int:
     """
     added = 0
     for entry_id, entry_data in new_entries.items():
+        entry_data = normalize_usage_entry(entry_data)
         if entry_id not in ledger:
             ledger[entry_id] = entry_data
             added += 1
@@ -161,15 +170,26 @@ def recalc_ledger_costs(ledger_path: Path, ledger: Dict[str, Dict],
     skipped = 0
 
     for entry in ledger.values():
-        ti = entry.get(FIELD_TOKENS_IN, 0)
-        to = entry.get(FIELD_TOKENS_OUT, 0)
-        cw = entry.get(FIELD_CACHE_WRITES, 0)
-        cr = entry.get(FIELD_CACHE_READS, 0)
+        token_values = (
+            entry.get(FIELD_TOKENS_IN),
+            entry.get(FIELD_TOKENS_OUT),
+            entry.get(FIELD_CACHE_WRITES),
+            entry.get(FIELD_CACHE_READS),
+        )
         model = entry.get('model')
 
-        old_cost = entry.get(FIELD_COST, 0.0)
+        old_cost = entry.get(FIELD_COST) or 0.0
         old_total += old_cost
 
+        # Explicitly unknown token components cannot be safely repriced:
+        # treating them as zero would understate a query's token-rate cost.
+        if any(value is None for value in token_values):
+            new_total += old_cost
+            if model:
+                skipped += 1
+            continue
+
+        ti, to, cw, cr = token_values
         if ti == 0 and to == 0 and cw == 0 and cr == 0:
             new_total += old_cost
             continue
@@ -197,6 +217,10 @@ def recalc_ledger_costs(ledger_path: Path, ledger: Dict[str, Dict],
             if not dry_run:
                 entry[FIELD_COST] = new_cost
                 entry[FIELD_CACHE_SAVINGS] = new_savings
+                entry["costProvenance"] = COST_PROVENANCE_RATE_CARD
+                pricing_ref = pricing_reference_for_model(model)
+                if pricing_ref is not None:
+                    entry["pricingRef"] = pricing_ref
             changed += 1
 
     if not dry_run and changed > 0:

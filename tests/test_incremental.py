@@ -22,6 +22,7 @@ from lcost.ledger import (
     save_ledger,
     update_file_state,
 )
+from lcost.ingest_state import new_ingest_state
 from lcost.pricing import (
     HAIKU_PRICING,
     OPUS_PRICING,
@@ -173,18 +174,20 @@ class TestIngestState:
         state = {"_version": 1, "files": {"/foo/bar.jsonl": {"size": 100, "byte_offset": 100, "mtime": 1.0}}}
         save_ingest_state(path, state)
         loaded = load_ingest_state(path)
-        assert loaded == state
+        assert loaded["files"] == state["files"]
+        assert loaded["sources"] == {}
+        assert loaded["last_ingest_at"] is None
 
     def test_missing_file(self, tmp_dir):
         path = tmp_dir / "nope.json"
         state = load_ingest_state(path)
-        assert state == {"_version": 1, "files": {}, "last_ingest_at": None}
+        assert state == new_ingest_state()
 
     def test_corrupt_file(self, tmp_dir):
         path = tmp_dir / "bad.json"
         path.write_text("not json at all")
         state = load_ingest_state(path)
-        assert state == {"_version": 1, "files": {}, "last_ingest_at": None}
+        assert state == new_ingest_state()
 
 
 # ---------------------------------------------------------------------------

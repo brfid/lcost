@@ -19,6 +19,8 @@ from lcost.ledger import (
     save_ledger,
     stamp_ingest,
 )
+from lcost.ingest_state import source_health
+from lcost.cli import print_ledger_stats
 from lcost.pipeline import DEFAULT_MAX_GAP_HOURS, run_ingest
 
 
@@ -115,7 +117,8 @@ class TestGapDetection:
         ledger = {}
 
         with patch("lcost.pipeline.collect_cline_data", return_value={}), \
-             patch("lcost.pipeline.collect_claude_code_data", return_value={}):
+             patch("lcost.pipeline.collect_claude_code_data", return_value={}), \
+             patch("lcost.pipeline.collect_codex_data", return_value={}):
             run_ingest(ledger_path, ledger, source="all", quiet=False)
 
         captured = capsys.readouterr()
@@ -134,7 +137,8 @@ class TestGapDetection:
         })
 
         with patch("lcost.pipeline.collect_cline_data", return_value={}), \
-             patch("lcost.pipeline.collect_claude_code_data", return_value={}):
+             patch("lcost.pipeline.collect_claude_code_data", return_value={}), \
+             patch("lcost.pipeline.collect_codex_data", return_value={}):
             run_ingest(ledger_path, ledger, source="all", quiet=False)
 
         captured = capsys.readouterr()
@@ -154,7 +158,8 @@ class TestGapDetection:
         })
 
         with patch("lcost.pipeline.collect_cline_data", return_value={}) as cline, \
-             patch("lcost.pipeline.collect_claude_code_data", return_value={}) as cc:
+             patch("lcost.pipeline.collect_claude_code_data", return_value={}) as cc, \
+             patch("lcost.pipeline.collect_codex_data", return_value={}) as codex:
             run_ingest(ledger_path, ledger, source="all", quiet=False,
                        max_gap_hours=24.0)
 
@@ -163,8 +168,10 @@ class TestGapDetection:
         # Collectors called with fresh ingest_state (no old file entry)
         cline_state = cline.call_args.kwargs["ingest_state"]
         cc_state = cc.call_args.kwargs["ingest_state"]
+        codex_state = codex.call_args.kwargs["ingest_state"]
         assert "/some/old/file.jsonl" not in cline_state.get("files", {})
         assert "/some/old/file.jsonl" not in cc_state.get("files", {})
+        assert "/some/old/file.jsonl" not in codex_state.get("files", {})
 
     def test_custom_gap_threshold(self, tmp_dir, capsys):
         """User can tune the threshold."""
@@ -178,7 +185,8 @@ class TestGapDetection:
         })
 
         with patch("lcost.pipeline.collect_cline_data", return_value={}), \
-             patch("lcost.pipeline.collect_claude_code_data", return_value={}):
+             patch("lcost.pipeline.collect_claude_code_data", return_value={}), \
+             patch("lcost.pipeline.collect_codex_data", return_value={}):
             # 1-hour threshold: 2h gap should trigger
             run_ingest(ledger_path, ledger, source="all", quiet=False,
                        max_gap_hours=1.0)
@@ -198,7 +206,8 @@ class TestGapDetection:
         })
 
         with patch("lcost.pipeline.collect_cline_data", return_value={}), \
-             patch("lcost.pipeline.collect_claude_code_data", return_value={}):
+             patch("lcost.pipeline.collect_claude_code_data", return_value={}), \
+             patch("lcost.pipeline.collect_codex_data", return_value={}):
             run_ingest(ledger_path, ledger, source="all", quiet=False,
                        deep=True)
 
@@ -213,7 +222,8 @@ class TestBackupIntegration:
         ledger = {"pre": {"cost": 1.0}}
 
         with patch("lcost.pipeline.collect_cline_data", return_value={}), \
-             patch("lcost.pipeline.collect_claude_code_data", return_value={}):
+             patch("lcost.pipeline.collect_claude_code_data", return_value={}), \
+             patch("lcost.pipeline.collect_codex_data", return_value={}):
             run_ingest(ledger_path, ledger, source="all", quiet=True)
 
         today = datetime.now().strftime("%Y-%m-%d")
@@ -235,8 +245,83 @@ class TestTimestampPersisted:
         ledger = {}
 
         with patch("lcost.pipeline.collect_cline_data", return_value={}), \
-             patch("lcost.pipeline.collect_claude_code_data", return_value={}):
+             patch("lcost.pipeline.collect_claude_code_data", return_value={}), \
+             patch("lcost.pipeline.collect_codex_data", return_value={}):
             run_ingest(ledger_path, ledger, source="all", quiet=True)
 
         state = load_ingest_state(ledger_path.parent / "ingest_state.json")
         assert state["last_ingest_at"] is not None
+
+
+class TestSourceHealth:
+    def test_records_each_successful_source_scan(self, tmp_dir):
+        ledger_path = tmp_dir / "ledger.json"
+        ledger = {}
+        codex_entry = {
+            "codex:one": {
+                "source": "codex",
+                "ts": "2026-08-25T10:00:00+00:00",
+                "tokensIn": 10,
+                "tokensOut": 2,
+                "cost": 0.01,
+            },
+        }
+
+        with patch("lcost.pipeline.collect_cline_data", return_value={}), \
+             patch("lcost.pipeline.collect_claude_code_data", return_value={}), \
+             patch("lcost.pipeline.collect_codex_data", return_value=codex_entry):
+            assert run_ingest(ledger_path, ledger, quiet=True) == 1
+
+        state = load_ingest_state(ledger_path.parent / "ingest_state.json")
+        health = source_health(state)
+        assert health["cline"]["records_seen"] == 0
+        assert health["cc"]["records_seen"] == 0
+        assert health["codex"]["records_seen"] == 1
+        assert health["codex"]["records_added"] == 1
+        assert health["codex"]["last_error"] is None
+
+    def test_one_collector_error_does_not_hide_other_sources(self, tmp_dir):
+        ledger_path = tmp_dir / "ledger.json"
+        ledger = {}
+
+        with patch(
+            "lcost.pipeline.collect_cline_data",
+            side_effect=OSError("Cline is being rewritten"),
+        ), patch(
+            "lcost.pipeline.collect_claude_code_data", return_value={},
+        ), patch(
+            "lcost.pipeline.collect_codex_data", return_value={},
+        ):
+            assert run_ingest(ledger_path, ledger, quiet=True) == 0
+
+        state = load_ingest_state(ledger_path.parent / "ingest_state.json")
+        health = source_health(state)
+        assert health["cline"]["last_error"].startswith("OSError:")
+        assert health["cc"]["last_error"] is None
+        assert health["codex"]["last_error"] is None
+
+    def test_stats_exposes_source_freshness(self, tmp_dir, capsys):
+        ledger_path = tmp_dir / "ledger.json"
+        save_ledger(ledger_path, {})
+        save_ingest_state(ledger_path.parent / "ingest_state.json", {
+            "_version": 2,
+            "files": {},
+            "sources": {
+                "codex": {
+                    "last_attempt_at": datetime.now().isoformat(),
+                    "last_success_at": datetime.now().isoformat(),
+                    "last_error": None,
+                    "records_seen": 12,
+                    "records_added": 3,
+                },
+            },
+            "last_ingest_at": datetime.now().isoformat(),
+        })
+
+        print_ledger_stats(ledger_path, {})
+
+        output = capsys.readouterr().out
+        assert "Source health:" in output
+        assert "Codex / ChatGPT" in output
+        assert "12 seen" in output
+        assert "Claude Code" in output

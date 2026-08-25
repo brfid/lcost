@@ -3,7 +3,7 @@
 This module also owns two cross-cutting registries to avoid duplicating
 them across `cli`, `aggregation`, `collectors`, and `tui`:
 
-- `SOURCES`  — the set of supported data sources (Claude Code, Cline).
+- `SOURCES`  — the set of supported data sources.
 - `data_dir()` — single helper for the on-disk root; everything else
   derives from it so the package rename lands in one place.
 """
@@ -37,9 +37,9 @@ class Source:
     """One supported data source.
 
     Attributes:
-      cli_name: Value accepted by ``--source`` (``cline``, ``claude-code``).
-      short_name: Ledger ``source`` field value (``cline``, ``cc``).
-      display_name: Human-readable label (``Cline``, ``Claude Code``).
+      cli_name: Value accepted by ``--source``.
+      short_name: Ledger ``source`` field value.
+      display_name: Human-readable label.
       aliases: Extra CLI strings that should resolve to ``cli_name``
         (e.g. ``cc`` for ``claude-code``).
     """
@@ -52,6 +52,10 @@ class Source:
 SOURCES: List[Source] = [
     Source("cline",       "cline", "Cline"),
     Source("claude-code", "cc",    "Claude Code", aliases=("cc",)),
+    Source(
+        "codex", "codex", "Codex / ChatGPT",
+        aliases=("openai", "chatgpt", "chatgpt-work"),
+    ),
 ]
 
 # Derived lookups
@@ -123,8 +127,12 @@ def format_number(num: int) -> str:
     return f"{num:,}"
 
 
-def format_cost(amount: float) -> str:
-    """Format dollar amount: $0.52 under $1, $134 at/above."""
+def format_cost(amount: Optional[float]) -> str:
+    """Format a dollar amount, preserving unavailable estimates as an em dash."""
+    if amount is None:
+        return "—"
+    if 0 < abs(amount) < 0.01:
+        return f"${amount:,.4f}"
     if abs(amount) < 1.0:
         return f"${amount:,.2f}"
     return f"${amount:,.0f}"
@@ -192,7 +200,7 @@ def calculate_totals(daily_data: Dict[str, Dict]) -> Dict:
     totals = init_field_dict()
     for data in daily_data.values():
         for field in FIELD_NAMES:
-            totals[field] += data.get(field, 0)
+            totals[field] += data.get(field) or 0
     return totals
 
 

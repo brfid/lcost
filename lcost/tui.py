@@ -14,7 +14,7 @@ from textual.widgets import Label, Static
 
 from textual_plotext import PlotextPlot
 
-from .aggregation import aggregate_by_day, entry_local_dt
+from .aggregation import aggregate_by_day
 from .formatters import (
     FIELD_CACHE_READS,
     FIELD_CACHE_SAVINGS,
@@ -23,10 +23,16 @@ from .formatters import (
     FIELD_REQUESTS,
     FIELD_TOKENS_IN,
     FIELD_TOKENS_OUT,
+    SOURCE_DISPLAY,
     SOURCE_MAP,
     format_cost,
     format_number,
     format_tokens,
+)
+from .ingest_state import (
+    get_ingest_state_path,
+    load_ingest_state,
+    source_health,
 )
 from .ledger import get_ledger_path, load_ledger
 from .pipeline import run_ingest
@@ -37,6 +43,8 @@ from .ops_data import (
     RowSpec,
     build_row_specs,
     cost_bar,
+    hour_week_grid,
+    iter_individual_entries,
     model_color,
     row_activity_text,
     short_model,
@@ -83,21 +91,6 @@ HEATMAP_CYCLE = {"cost": "requests", "requests": "tokens", "tokens": "cost"}
 HOURLY_CYCLE = {"cost": "tokens", "tokens": "requests", "requests": "cost"}
 
 
-
-
-# ── Helper: aggregate by hour-of-day × day-of-week ──
-
-def _iter_individual_entries(ledger: Dict, source_filter: Optional[str] = None):
-    """Yield (dt, entry) for non-historical entries, filtered by source."""
-    for entry_id, entry in ledger.items():
-        if entry_id.startswith("cline:historical:"):
-            continue
-        if source_filter and entry.get("source") != source_filter:
-            continue
-        try:
-            yield entry_local_dt(entry), entry
-        except (ValueError, KeyError):
-            continue
 
 
 # ── Heatmap day-axis labels ──
@@ -171,8 +164,8 @@ class CostTrackerApp(App):
         Binding("2", "expand('HEATMAP')", "Heatmap", show=False),
         Binding("3", "expand('LOG')", "Call log", show=False),
         Binding("4", "expand('CALLS')", "Calls", show=False),
-        # Unified metric toggle — board cycles the trend metric; a
-        # fullscreen panel cycles its own metric (TREND/HEATMAP).
+        # Unified metric toggle — board switches its price/tokens view;
+        # a fullscreen panel cycles its own metric (TREND/HEATMAP).
         Binding("m", "toggle_metric", "Toggle metric", show=False),
         # Hourly-bar metric toggle (cost / tokens / requests)
         Binding("h", "toggle_hourly_metric", "Toggle hourly metric",
@@ -209,6 +202,8 @@ class CostTrackerApp(App):
         self._heatmap_metric: str = "cost"
         # OPS hourly bar cycles: "cost" → "tokens" → "requests"
         self._hourly_metric: str = "cost"
+        # Board trend + heatmap switch together between price and tokens.
+        self._board_metric: str = "cost"
 
         # Reactive snapshot carrier — mounted in compose(); every live
         # widget subscribes to its `snapshot` attribute.
@@ -232,6 +227,7 @@ class CostTrackerApp(App):
         run_ingest(ledger_path, self._ledger, source=self._source_filter_arg,
                    no_ingest=self._no_ingest, force_ingest=self._force_ingest,
                    quiet=True)
+        ingest_state = load_ingest_state(get_ingest_state_path(ledger_path))
 
         arg = self._source_filter_arg
         self._source_filter = None if arg == "all" else SOURCE_MAP.get(arg, arg)
@@ -252,6 +248,7 @@ class CostTrackerApp(App):
 
         snap = compute_snapshot(
             self._ledger, self._daily, self._source_filter,
+            source_health=source_health(ingest_state),
         )
         self._metrics.update(snap)
         return snap
@@ -313,7 +310,7 @@ class CostTrackerApp(App):
             self._apply_hud_density()
 
     def _apply_hud_density(self) -> None:
-        """Toggle .hud-compact on the board container based on terminal height."""
+        """Adapt board density to the available terminal dimensions."""
         try:
             container = self.query_one("#panel-container", Vertical)
         except Exception:
@@ -322,6 +319,10 @@ class CostTrackerApp(App):
             container.add_class("hud-compact")
         else:
             container.remove_class("hud-compact")
+        if self.size.width < 130:
+            container.add_class("hud-detail-collapsed")
+        else:
+            container.remove_class("hud-detail-collapsed")
 
 
     def _update_status_bar(self) -> None:
@@ -453,6 +454,7 @@ class CostTrackerApp(App):
                 columns, row_class = self._render_row_spec(spec, selected=(idx == new_idx))
                 rows[idx].update(columns)
                 rows[idx].set_classes(row_class)
+        self._refresh_selected_detail()
         if 0 <= new_idx < len(rows):
             with contextlib.suppress(Exception):
                 rows[new_idx].scroll_visible(animate=False)
@@ -549,18 +551,20 @@ class CostTrackerApp(App):
     def action_toggle_metric(self) -> None:
         """Unified m-key metric toggle.
 
-        Board: cycles the trend metric (headline chart).
+        Board: switches the headline chart and heatmap between price/tokens.
         TREND fullscreen: cost → tokens_io → tokens_cache → savings → cost
         HEATMAP fullscreen: cost → requests → tokens → cost
         No-op on LOG / CALLS.
         """
         tab = self._current_tab
-        if tab in (BOARD, "TREND"):
+        if tab == BOARD:
+            self._board_metric = (
+                "tokens" if self._board_metric == "cost" else "cost"
+            )
+            self._render_board()
+        elif tab == "TREND":
             self._trend_metric = TREND_CYCLE[self._trend_metric]
-            if tab == "TREND":
-                self._render_panel("TREND")
-            else:
-                self._render_board()
+            self._render_panel("TREND")
         elif tab == "HEATMAP":
             self._heatmap_metric = HEATMAP_CYCLE[self._heatmap_metric]
             self._render_panel("HEATMAP")
@@ -624,18 +628,9 @@ class CostTrackerApp(App):
             if self._hm_ledger_sig != sig:
                 self._hm_grids = {}
                 self._hm_ledger_sig = sig
-            grid = [[0.0] * 24 for _ in range(7)]
-            for dt, entry in _iter_individual_entries(self._ledger, self._source_filter):
-                if metric == "cost":
-                    val = entry.get(FIELD_COST, 0)
-                elif metric == "requests":
-                    val = 1.0
-                else:  # tokens
-                    val = float(
-                        entry.get(FIELD_TOKENS_IN, 0) + entry.get(FIELD_TOKENS_OUT, 0)
-                    )
-                grid[dt.weekday()][dt.hour] += val
-            self._hm_grids[key] = grid
+            self._hm_grids[key] = hour_week_grid(
+                self._ledger, self._source_filter, metric,
+            )
         return self._hm_grids[key]
 
     def _make_chart(self, title: str, draw_fn: Callable,
@@ -698,6 +693,63 @@ class CostTrackerApp(App):
             ))
         return Vertical(*children, classes=cls)
 
+    def _format_source_strip(self, snap: MetricsSnapshot) -> str:
+        """Render current-day all-source totals plus collector freshness."""
+        scope = (
+            "ALL SOURCES"
+            if snap.source_filter is None
+            else SOURCE_DISPLAY.get(snap.source_filter, snap.source_filter)
+        )
+        metric_label = "TOKENS" if self._board_metric == "tokens" else "PRICE"
+        labels = {"codex": "Codex", "cc": "Claude", "cline": "Cline"}
+        value_parts = []
+        health_parts = []
+        for summary in snap.source_today:
+            label = labels.get(
+                summary.source,
+                SOURCE_DISPLAY.get(summary.source, summary.source),
+            )
+            value = (
+                format_tokens(summary.tokens)
+                if self._board_metric == "tokens"
+                else format_cost(summary.cost)
+            )
+            value_parts.append(f"[#FF9900]{label}[/] {value}")
+
+            health = snap.source_health.get(summary.source, {})
+            if health.get("last_error"):
+                freshness = "[#CC6666]error[/]"
+            else:
+                freshness = self._source_health_age(
+                    health.get("last_success_at"), snap.clock.now,
+                )
+            health_parts.append(f"{label} {freshness}")
+
+        values = "  ·  ".join(value_parts)
+        health_text = " / ".join(health_parts)
+        return (
+            f" [#9999CC]{scope} TODAY · {metric_label}[/]  {values}"
+            f"  [dim]│ scan {health_text}[/]"
+        )
+
+    @staticmethod
+    def _source_health_age(timestamp: object, now: datetime) -> str:
+        if not isinstance(timestamp, str):
+            return "unscanned"
+        try:
+            elapsed = max(
+                0, (now - datetime.fromisoformat(timestamp)).total_seconds(),
+            )
+        except ValueError:
+            return "unknown"
+        if elapsed < 60:
+            return "now"
+        if elapsed < 3600:
+            return f"{int(elapsed // 60)}m"
+        if elapsed < 86400:
+            return f"{elapsed / 3600:.1f}h"
+        return f"{elapsed / 86400:.1f}d"
+
     def _build_hud(self) -> Widget:
         """Dense HUD: KPI strip + charts + hourly + ranking + call log."""
         snap = self._snapshot
@@ -751,24 +803,49 @@ class CostTrackerApp(App):
             ),
             id="hud-kpi-strip",
         )
+        source_strip = LiveLabel(
+            self._metrics,
+            self._format_source_strip,
+            id="hud-source-strip",
+        )
 
         # ── 2. Mid tier: trend chart + hour×weekday heatmap ──
-        # Trend: always cost view in HUD (fixed, no m-toggle)
+        # Both views switch together between query price and token volume.
+        board_metric = self._board_metric
+        next_metric = "price" if board_metric == "tokens" else "tokens"
         sorted_days = sorted(self._daily.keys())[-30:]
         if sorted_days:
             dates = list(range(len(sorted_days)))
-            costs = [self._daily[d][FIELD_COST] for d in sorted_days]
-            total_cost = sum(costs)
+            if board_metric == "tokens":
+                values = [
+                    self._daily[d][FIELD_TOKENS_IN]
+                    + self._daily[d][FIELD_TOKENS_OUT]
+                    for d in sorted_days
+                ]
+                total = sum(values)
+                chart_title = "◖ DAILY TOKENS — 30d ◗"
+                chart_color = (153, 153, 204)
+                value_format = lambda value: format_tokens(
+                    int(value), compact=True
+                )
+                total_label = format_tokens(int(total))
+            else:
+                values = [self._daily[d][FIELD_COST] for d in sorted_days]
+                total = sum(values)
+                chart_title = "◖ DAILY TOKEN PRICE — 30d ◗"
+                chart_color = (255, 153, 0)
+                value_format = format_cost
+                total_label = format_cost(total)
 
             def draw_trend(plt):
-                plt.plot(dates, costs, marker="dot", color=(255, 153, 0))
+                plt.plot(dates, values, marker="dot", color=chart_color)
                 self._set_date_xticks(plt, sorted_days, dates, max_ticks=6)
-                self._set_yticks(plt, costs, format_cost)
+                self._set_yticks(plt, values, value_format)
 
             trend_subtitle = (
                 f"{sorted_days[0][5:]} → {sorted_days[-1][5:]}  ◥  "
-                f"Total: {format_cost(total_cost)}  ◥  "
-                f"[dim]\\[4] full trend[/]"
+                f"Total: {total_label}  ◥  "
+                f"[dim][m] → {next_metric} · [1] full trend[/]"
             )
             trend_plot = PlotextPlot()
 
@@ -786,7 +863,7 @@ class CostTrackerApp(App):
                 classes="chart-panel",
                 id="hud-trend",
             )
-            trend_widget.border_title = "◖ DAILY COST — 30d ◗"
+            trend_widget.border_title = chart_title
             trend_widget.border_subtitle = trend_subtitle
         else:
             trend_widget = Vertical(
@@ -794,13 +871,17 @@ class CostTrackerApp(App):
                 classes="chart-panel",
                 id="hud-trend",
             )
-            trend_widget.border_title = "◖ DAILY COST — 30d ◗"
+            trend_widget.border_title = (
+                "◖ DAILY TOKENS — 30d ◗"
+                if board_metric == "tokens"
+                else "◖ DAILY TOKEN PRICE — 30d ◗"
+            )
 
 
-        # Heatmap: cost by hour × weekday (all-time, fixed)
-        hm_grid = self._get_hm_grid("cost")
+        # Heatmap: matching price/tokens activity by hour × weekday.
+        hm_grid = self._get_hm_grid(board_metric)
         hour_ticks = [(h, f"{h:02d}") for h in range(24) if h % 6 == 0]
-        _czero, _clow, _chigh = HM_COLORS["cost"]
+        _czero, _clow, _chigh = HM_COLORS[board_metric]
         heatmap_widget = HeatmapGrid(
             hm_grid,
             y_labels=DAY_NAMES,
@@ -814,8 +895,14 @@ class CostTrackerApp(App):
             classes="chart-panel",
             id="hud-heatmap",
         )
-        heatmap_panel.border_title = "◖ COST BY HOUR × WEEKDAY ◗"
-        heatmap_panel.border_subtitle = "[6] full heatmap"
+        heatmap_panel.border_title = (
+            "◖ TOKENS BY HOUR × WEEKDAY ◗"
+            if board_metric == "tokens"
+            else "◖ TOKEN PRICE BY HOUR × WEEKDAY ◗"
+        )
+        heatmap_panel.border_subtitle = (
+            f"[m] → {next_metric} · [2] full heatmap"
+        )
 
 
         mid_tier = Horizontal(trend_widget, heatmap_panel, id="hud-mid")
@@ -833,10 +920,17 @@ class CostTrackerApp(App):
 
         # ── 5. Call log ──
         entries = snap.ops_entries if snap else []
-        log_panel = self._build_log_panel(entries)
-        log_panel.id = "hud-log"
+        log_table = self._build_log_panel(entries)
+        log_table.id = "hud-log-table"
+        log_panel = Horizontal(
+            log_table,
+            self._build_selected_detail_panel(),
+            id="hud-log",
+        )
 
-        children: list[Widget] = [kpi_strip, mid_tier, hourly_wrap]
+        children: list[Widget] = [
+            kpi_strip, source_strip, mid_tier, hourly_wrap,
+        ]
         if ranking_row is not None:
             children.append(ranking_row)
         children.append(log_panel)
@@ -1049,8 +1143,9 @@ class CostTrackerApp(App):
         end cap), keeping the bar geometry clean.
         """
         costs = []
-        for _dt, entry in _iter_individual_entries(self._ledger, self._source_filter):
-            c = entry.get(FIELD_COST, 0)
+        for _dt, entry in iter_individual_entries(
+                self._ledger, self._source_filter):
+            c = entry.get(FIELD_COST) or 0
             if c > 0:
                 costs.append(c)
 
@@ -1240,7 +1335,7 @@ class CostTrackerApp(App):
         entries = snap.ops_entries
 
         max_log_cost = max(
-            (e.get(FIELD_COST, 0) for _, _, e in entries[:LOG_ROW_CAP]),
+            (e.get(FIELD_COST) or 0 for _, _, e in entries[:LOG_ROW_CAP]),
             default=0,
         )
         specs = build_row_specs(entries, max_log_cost)
@@ -1262,6 +1357,7 @@ class CostTrackerApp(App):
             )
             row.update(columns)
             row.set_classes(row_class)
+        self._refresh_selected_detail()
 
     # ── Board panel builders ──
 
@@ -1451,7 +1547,7 @@ class CostTrackerApp(App):
     def _build_log_panel(self, entries: list) -> Widget:
         """Recent-calls log panel — header + up to LOG_ROW_CAP rows."""
         max_log_cost = max(
-            (e.get(FIELD_COST, 0) for _, _, e in entries[:LOG_ROW_CAP]),
+            (e.get(FIELD_COST) or 0 for _, _, e in entries[:LOG_ROW_CAP]),
             default=0,
         )
         specs = build_row_specs(entries, max_log_cost)
@@ -1492,6 +1588,105 @@ class CostTrackerApp(App):
         ))
         return panel
 
+    def _build_selected_detail_panel(self) -> Widget:
+        """Persistent, compact detail view for the selected call-log row."""
+        panel = Vertical(
+            Static(
+                self._selected_detail_markup(),
+                id="query-detail-content",
+                markup=True,
+            ),
+            id="hud-log-detail",
+        )
+        panel.border_title = "◖ SELECTED QUERY ◗"
+        panel.border_subtitle = "[j/k] browse · [enter] full detail"
+        return panel
+
+    def _refresh_selected_detail(self) -> None:
+        """Update the board-only selected-query inspector if it is mounted."""
+        try:
+            detail = self.query_one("#query-detail-content", Static)
+        except Exception:
+            return
+        detail.update(self._selected_detail_markup())
+
+    def _selected_detail_markup(self) -> str:
+        """Render the selected call's useful metadata in the board side pane."""
+        if not self._ops_row_specs:
+            return "[dim]No queries in the active filter.[/]"
+
+        idx = self._selected_row if self._selected_row >= 0 else 0
+        idx = min(idx, len(self._ops_row_specs) - 1)
+        spec = self._ops_row_specs[idx]
+        entry = spec.entry
+
+        raw_model = str(entry.get("model") or "unknown")
+        display_model = short_model(raw_model)
+        source = SOURCE_DISPLAY.get(entry.get("source"), entry.get("source") or "unknown")
+        surface = str(entry.get("surface") or "")
+        provider = str(entry.get("modelProvider") or "")
+        source_bits = [str(source)]
+        if surface:
+            source_bits.append(surface)
+        if provider:
+            source_bits.append(provider)
+
+        own_cost = entry.get(FIELD_COST)
+        display_cost = None if own_cost is None else own_cost + spec.spawn_cost
+        pricing_ref = entry.get("pricingRef") or entry.get("costProvenance") or "unavailable"
+
+        def token(value: object) -> str:
+            try:
+                return format_number(max(0, int(value or 0)))
+            except (TypeError, ValueError):
+                return "—"
+
+        prompt = str(entry.get("promptPreview") or "").strip().replace("\n", " ")
+        if not prompt:
+            prompt = "No prompt text stored."
+        elif len(prompt) > 240:
+            prompt = prompt[:237].rstrip() + "…"
+
+        project = str(entry.get("project") or "—")
+        tools = short_tools(entry.get("tools") or []) or "—"
+        stop = str(entry.get("stopReason") or "—")
+        reasoning = entry.get("reasoningTokens")
+
+        lines = [
+            f"[b {model_color(display_model)}]{self._esc_markup(display_model)}[/]"
+            f" [dim]{self._esc_markup(raw_model)}[/]",
+            f"[#9999CC]SOURCE[/] {self._esc_markup(' · '.join(source_bits))}",
+            "",
+            f"[#9999CC]QUERY PRICE[/] [b #FF9900]{format_cost(display_cost)}[/]",
+            f"[dim]{self._esc_markup(str(pricing_ref))}[/]",
+            (
+                f"[#9999CC]TOKENS[/] in {token(entry.get(FIELD_TOKENS_IN))}"
+                f" · out {token(entry.get(FIELD_TOKENS_OUT))}"
+            ),
+            (
+                f"[#9999CC]CACHE[/] read {token(entry.get(FIELD_CACHE_READS))}"
+                f" · write {token(entry.get(FIELD_CACHE_WRITES))}"
+            ),
+        ]
+        if reasoning is not None:
+            lines.append(f"[#9999CC]REASONING[/] {token(reasoning)} [dim](included in output)[/]")
+        if spec.spawn_cost > 0:
+            lines.append(
+                f"[#9999CC]SUBAGENTS[/] +{format_cost(spec.spawn_cost)} included above"
+            )
+
+        lines.extend([
+            "",
+            f"[#9999CC]TIME[/] {spec.dt.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"[#9999CC]PROJECT[/] {self._esc_markup(project)}",
+            f"[#9999CC]TOOLS[/] {self._esc_markup(tools)}",
+            f"[#9999CC]STOP[/] {self._esc_markup(stop)}",
+            "",
+            "[#9999CC]PROMPT[/]",
+            f"[#FFCC99]{self._esc_markup(prompt)}[/]",
+        ])
+        return "\n".join(lines)
+
     @staticmethod
     def _row_marker(spec: RowSpec, selected: bool, is_new: bool) -> str:
         """Priority ladder for the left-gutter marker glyph."""
@@ -1528,14 +1723,17 @@ class CostTrackerApp(App):
         dt = spec.dt
         short_m = short_model(e.get("model"))
         color = model_color(short_m)
-        tok_in = format_number(e.get(FIELD_TOKENS_IN, 0))
-        tok_out = format_number(e.get(FIELD_TOKENS_OUT, 0))
-        cr = e.get(FIELD_CACHE_READS, 0)
-        cw = e.get(FIELD_CACHE_WRITES, 0)
+        tok_in = format_number(e.get(FIELD_TOKENS_IN) or 0)
+        tok_out = format_number(e.get(FIELD_TOKENS_OUT) or 0)
+        cr = e.get(FIELD_CACHE_READS) or 0
+        cw = e.get(FIELD_CACHE_WRITES) or 0
         cache_str = f"{format_number(cr)}/{format_number(cw)}"
-        display_cost = e.get(FIELD_COST, 0) + spec.spawn_cost
+        own_cost = e.get(FIELD_COST)
+        display_cost = (
+            None if own_cost is None else own_cost + spec.spawn_cost
+        )
         cost = format_cost(display_cost)
-        bar = cost_bar(display_cost, spec.max_log_cost)
+        bar = cost_bar(display_cost or 0, spec.max_log_cost)
         proj = short_project(e.get("project", ""))[:14]
         kind_marker = "[#9999CC]↳[/]" if spec.is_subagent else ""
         time_str = dt.strftime("%H:%M:%S")
