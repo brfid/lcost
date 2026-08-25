@@ -9,6 +9,7 @@ from lcost.ops_data import (
     aggregate_today,
     collect_entries,
     cost_bar,
+    hour_week_grid,
     hourly_cost_today,
     model_color,
     percentile,
@@ -16,6 +17,7 @@ from lcost.ops_data import (
     short_model,
     short_project,
     short_tools,
+    source_today,
     subagent_cost_rollup,
 )
 
@@ -160,6 +162,49 @@ class TestHourlyCostToday:
         ]
         result = hourly_cost_today(entries)
         assert sum(result) == 1.0
+
+
+class TestBoardReductions:
+    def test_hour_week_grid_tokens_uses_input_and_output(self):
+        now = datetime.now().replace(hour=14, minute=0, second=0, microsecond=0)
+        ledger = {
+            "codex:one": {
+                "source": "codex",
+                "ts": now.isoformat(),
+                "tokensIn": 100,
+                "tokensOut": 25,
+                "cost": 0.01,
+            },
+        }
+
+        grid = hour_week_grid(ledger, None, "tokens")
+
+        assert grid[now.weekday()][14] == 125
+
+    def test_source_today_has_stable_all_source_totals(self):
+        now = datetime.now().replace(hour=14, minute=0, second=0, microsecond=0)
+        entries = [
+            (now, "codex:one", {
+                "source": "codex", "tokensIn": 100, "tokensOut": 25,
+                "cost": 0.50,
+            }),
+            (now, "cc:one", {
+                "source": "cc", "tokensIn": 20, "tokensOut": 5,
+                "cost": 0.10,
+            }),
+            (now - timedelta(days=1), "cline:old", {
+                "source": "cline", "tokensIn": 999, "tokensOut": 1,
+                "cost": 9.99,
+            }),
+        ]
+
+        rows = source_today(entries, ("codex", "cc", "cline"), now=now)
+
+        assert [(row.source, row.requests, row.tokens, row.cost) for row in rows] == [
+            ("codex", 1, 125, 0.50),
+            ("cc", 1, 25, 0.10),
+            ("cline", 0, 0, 0.0),
+        ]
 
 
 # ── collect_entries ───────────────────────────────────────────────────────
@@ -400,5 +445,4 @@ class TestAggregateTodaySpawns:
         assert s["spawn_count"] == 3
         assert s["subagent_type_counts"]["Explore"] == 2
         assert s["subagent_type_counts"]["general-purpose"] == 1
-
 

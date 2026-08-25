@@ -20,6 +20,10 @@ check for `None` and leave the stored cost alone.
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+# Bump this when any configured token price changes. New entries retain this
+# reference so a future rate change is explainable without account billing.
+RATE_CARD_VERSION = "2026-08-25"
+
 # USD per million tokens
 # Source: https://www.anthropic.com/pricing  (verify quarterly — update here if stale)
 OPUS_PRICING = {
@@ -45,6 +49,18 @@ GPT5_NANO_PRICING = {
     'input': 0.05, 'output': 0.40, 'cache_write': 0.05, 'cache_read': 0.005,
 }
 
+# Codex Bedrock-backed token-rate estimates (USD/MTok). Cache writes are
+# modeled at 1.25× uncached input for the GPT-5.6 family.
+GPT56_SOL_PRICING = {
+    'input': 4.00, 'output': 20.00, 'cache_write': 5.00, 'cache_read': 0.40,
+}
+GPT56_TERRA_PRICING = {
+    'input': 2.00, 'output': 12.00, 'cache_write': 2.50, 'cache_read': 0.20,
+}
+GPT56_LUNA_PRICING = {
+    'input': 0.20, 'output': 1.20, 'cache_write': 0.25, 'cache_read': 0.02,
+}
+
 
 @dataclass(frozen=True)
 class ModelFamily:
@@ -66,6 +82,18 @@ FAMILIES: List[ModelFamily] = [
     ModelFamily("sonnet", ("sonnet",),             "#9999CC", SONNET_PRICING),
     ModelFamily("haiku",  ("haiku",),              "#CC6699", HAIKU_PRICING),
     # OpenAI (most specific first so gpt-5-nano doesn't match bare gpt-5)
+    ModelFamily(
+        "gpt-5.6-luna", ("gpt-5.6-luna", "gpt-5-6-luna"),
+        "#59B4D9", GPT56_LUNA_PRICING,
+    ),
+    ModelFamily(
+        "gpt-5.6-terra", ("gpt-5.6-terra", "gpt-5-6-terra"),
+        "#3C9F6F", GPT56_TERRA_PRICING,
+    ),
+    ModelFamily(
+        "gpt-5.6-sol", ("gpt-5.6-sol", "gpt-5-6-sol"),
+        "#2B7A45", GPT56_SOL_PRICING,
+    ),
     ModelFamily("gpt-5-nano", ("gpt-5-nano",),     "#66CC99", GPT5_NANO_PRICING),
     ModelFamily("gpt-5-mini", ("gpt-5-mini",),     "#66CCCC", GPT5_MINI_PRICING),
     ModelFamily("gpt-5",  ("gpt-5", "gpt5"),       "#33AA66", GPT5_PRICING),
@@ -137,6 +165,19 @@ def get_model_pricing(model: Optional[str]) -> Optional[Dict[str, float]]:
 def has_priced_model(model: Optional[str]) -> bool:
     """True iff we can compute a real cost for this model."""
     return get_model_pricing(model) is not None
+
+
+def pricing_reference_for_model(model: Optional[str]) -> Optional[str]:
+    """Return a stable reference for the configured token rate used.
+
+    ``None`` means the model family is known but deliberately unpriced.
+    Completely unknown legacy models retain the explicit default reference.
+    """
+    if not has_priced_model(model):
+        return None
+    family = family_for_model(model)
+    key = family.key if family is not None else "default"
+    return f"rate-card:{RATE_CARD_VERSION}:{key}"
 
 
 def calculate_cost(tokens_in: int, tokens_out: int, cache_writes: int,

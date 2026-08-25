@@ -7,19 +7,25 @@ from typing import Dict, Optional
 
 from .aggregation import aggregate_by_day, compute_date_window, entry_local_dt, format_output
 from .formatters import (
+    SOURCES,
     SOURCE_CLI_CHOICES,
     SOURCE_DISPLAY,
     SOURCE_MAP,
     resolve_source_cli,
 )
-from .ingest_state import get_ingest_state_path, hours_since_last_ingest, load_ingest_state
+from .ingest_state import (
+    get_ingest_state_path,
+    hours_since_last_ingest,
+    load_ingest_state,
+    source_health,
+)
 from .ledger import backup_dir, get_ledger_path, load_ledger, recalc_ledger_costs
 from .pipeline import run_ingest
 
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description='Track LLM API spend across Cline and Claude Code.',
+        description='Track local LLM usage across Codex, Claude Code, and Cline.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -29,6 +35,7 @@ Examples:
   lcost --report --all        # All days with activity
   lcost --source cline        # Dashboard, Cline only
   lcost --source claude-code  # Dashboard, Claude Code only
+  lcost --source codex        # Dashboard, Codex / ChatGPT only
   lcost --cached              # Skip scanning live sources
   lcost --rescan              # Rescan all files from scratch
   lcost --deep                # Re-parse every file (dedups; data-safe)
@@ -126,6 +133,23 @@ def _format_bytes(size_bytes: int) -> str:
     return f"{size_bytes} B"
 
 
+def _format_age(timestamp: object) -> str:
+    """Return a concise local age for persisted ingest timestamps."""
+    if not isinstance(timestamp, str):
+        return "never"
+    try:
+        elapsed = max(0, (datetime.now() - datetime.fromisoformat(timestamp)).total_seconds())
+    except ValueError:
+        return "unknown"
+    if elapsed < 60:
+        return "now"
+    if elapsed < 3600:
+        return f"{int(elapsed // 60)}m ago"
+    if elapsed < 86400:
+        return f"{elapsed / 3600:.1f}h ago"
+    return f"{elapsed / 86400:.1f}d ago"
+
+
 def print_ledger_stats(ledger_path: Path, ledger: Dict[str, Dict]) -> None:
     """Print ledger file stats — size, entry counts, date range, projects."""
     try:
@@ -188,6 +212,22 @@ def print_ledger_stats(ledger_path: Path, ledger: Dict[str, Dict]) -> None:
     if backups:
         print(f"Backups:     {len(backups)} in {bdir}")
         print(f"  latest     {backups[-1].name}")
+
+    print("Source health:")
+    health_by_source = source_health(state)
+    for source in SOURCES:
+        health = health_by_source.get(source.short_name)
+        if not isinstance(health, dict):
+            print(f"  {source.display_name:<16} not yet scanned")
+            continue
+        if health.get("last_error"):
+            print(f"  {source.display_name:<16} error · "
+                  f"last success {_format_age(health.get('last_success_at'))}")
+            continue
+        seen = health.get("records_seen") or 0
+        added = health.get("records_added") or 0
+        print(f"  {source.display_name:<16} ok {_format_age(health.get('last_success_at'))}"
+              f" · {seen:,} seen · {added:,} new")
 
 
 def main():

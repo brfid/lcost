@@ -403,6 +403,17 @@ Sparkline > .sparkline--min-color {
     padding-left: 2;
 }
 
+#hud-source-strip {
+    height: 1;
+    width: 100%;
+    padding: 0 1;
+    color: #CC9966;
+    background: #11161E;
+    border-left: outer #FF9900;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
 
 .hud-kpi-spark {
     width: 100%;
@@ -495,6 +506,41 @@ Sparkline > .sparkline--min-color {
 #hud-log {
     height: 1fr;
     min-height: 8;
+    width: 100%;
+    layout: horizontal;
+}
+
+#hud-log-table {
+    width: 60%;
+    height: 100%;
+}
+
+#hud-log-detail {
+    width: 40%;
+    height: 100%;
+    min-height: 8;
+    margin-left: 1;
+    padding: 0 1;
+    border: round #9999CC;
+    border-title-color: #FF9900;
+    border-subtitle-color: #9999CC;
+    background: #0A0A0A;
+}
+
+#query-detail-content {
+    width: 100%;
+    height: auto;
+    color: #FFCC99;
+    text-wrap: wrap;
+}
+
+.hud-detail-collapsed #hud-log-table {
+    width: 100%;
+}
+
+.hud-detail-collapsed #hud-log-detail,
+.hud-compact #hud-log-detail {
+    display: none;
 }
 
 /* Compact HUD: hide mid tier on short terminals */
@@ -538,4 +584,3 @@ EntryDetailScreen {
     color: #FFCC99;
     height: auto;
 }
-

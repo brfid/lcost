@@ -13,12 +13,14 @@ from .formatters import (
 def entry_local_dt(entry: Dict) -> datetime:
     """Parse an entry timestamp into local-time ``datetime``.
 
-    Claude Code entries are stored UTC-naive and converted here. Cline
-    entries are already in local time.
+    Claude Code entries are stored UTC-naive and converted here. Codex
+    entries carry a UTC offset, while Cline entries are already local.
     """
     dt = datetime.fromisoformat(entry['ts'])
     if entry.get('source') in ('cc', 'agent_spawn'):
         dt = dt.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+    elif dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)
     return dt
 
 
@@ -67,9 +69,9 @@ def aggregate_by_day(ledger: Dict[str, Dict],
         for field in FIELD_NAMES:
             if field == FIELD_REQUESTS:
                 continue
-            day[field] += entry.get(field, 0)
+            day[field] += entry.get(field) or 0
 
-        day[FIELD_REQUESTS] += entry.get(FIELD_REQUESTS, 1)
+        day[FIELD_REQUESTS] += entry.get(FIELD_REQUESTS) or 1
 
     return dict(daily_data)
 

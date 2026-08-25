@@ -1,4 +1,4 @@
-"""Per-run ingest state: file seek-offsets, last-ingest timestamp.
+"""Per-run ingest state: file offsets, source health, and last-ingest time.
 
 Kept separate from `ledger.py` because the two serve different lifecycles:
 the ledger is the durable cost record; ingest state is bookkeeping that can
@@ -17,14 +17,20 @@ def get_ingest_state_path(ledger_path: Path) -> Path:
 
 
 def new_ingest_state() -> Dict:
-    return {"_version": 1, "files": {}, "last_ingest_at": None}
+    return {
+        "_version": 2,
+        "files": {},
+        "sources": {},
+        "last_ingest_at": None,
+    }
 
 
 def load_ingest_state(path: Path) -> Dict:
-    return load_json(
+    state = load_json(
         path, new_ingest_state(),
         validate=lambda d: isinstance(d, dict) and "files" in d,
     )
+    return _normalize_state(state)
 
 
 def save_ingest_state(path: Path, state: Dict) -> None:
@@ -51,6 +57,32 @@ def hours_since_last_ingest(state: Dict) -> Optional[float]:
 
 def stamp_ingest(state: Dict) -> None:
     state["last_ingest_at"] = datetime.now().isoformat(timespec="seconds")
+
+
+def record_source_success(state: Dict, source: str, records_seen: int,
+                          records_added: int) -> None:
+    """Persist a privacy-safe result for one collector invocation."""
+    stamp = datetime.now().isoformat(timespec="seconds")
+    health = _source_health_slot(state, source)
+    health.update({
+        "last_attempt_at": stamp,
+        "last_success_at": stamp,
+        "last_error": None,
+        "records_seen": max(0, int(records_seen)),
+        "records_added": max(0, int(records_added)),
+    })
+
+
+def record_source_failure(state: Dict, source: str, error: Exception) -> None:
+    """Persist a bounded diagnostic without exposing collector contents."""
+    health = _source_health_slot(state, source)
+    health["last_attempt_at"] = datetime.now().isoformat(timespec="seconds")
+    health["last_error"] = f"{type(error).__name__}: {str(error)[:160]}"
+
+
+def source_health(state: Dict) -> Dict[str, Dict]:
+    """Return the normalized per-source collector health mapping."""
+    return _normalize_state(state)["sources"]
 
 
 def prune_orphan_file_state(state: Dict) -> int:
@@ -115,3 +147,23 @@ def update_file_state(state: Dict, filepath: Path, byte_offset: int,
 def get_stored_user_text(state: Dict, filepath: Path) -> str:
     """Retrieve last captured user text for a file, for seeding incremental resumes."""
     return state.get("files", {}).get(str(filepath), {}).get("last_user_text", "")
+
+
+def _normalize_state(state: Dict) -> Dict:
+    """Adapt v1 state in memory without forcing an eager migration write."""
+    state.setdefault("_version", 1)
+    state["files"] = state.get("files") if isinstance(state.get("files"), dict) else {}
+    state["sources"] = (
+        state.get("sources") if isinstance(state.get("sources"), dict) else {}
+    )
+    state.setdefault("last_ingest_at", None)
+    return state
+
+
+def _source_health_slot(state: Dict, source: str) -> Dict:
+    sources = source_health(state)
+    current = sources.get(source)
+    if not isinstance(current, dict):
+        current = {}
+        sources[source] = current
+    return current

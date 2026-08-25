@@ -20,6 +20,7 @@ from lcost.ledger import recalc_ledger_costs
 from lcost.ops_data import model_color, short_model
 from lcost.pricing import (
     GPT5_PRICING,
+    GPT56_LUNA_PRICING,
     calculate_cost,
     family_for_model,
     has_priced_model,
@@ -73,6 +74,15 @@ class TestPricing:
         cost = calculate_cost(1_000_000, 1_000_000, 0, 0, "gpt-5-mini")
         # input 0.25 + output 2.00
         assert cost == pytest.approx(2.25)
+
+    def test_codex_bedrock_luna_priced(self):
+        cost = calculate_cost(
+            1_000_000, 1_000_000, 1_000_000, 1_000_000,
+            "openai.gpt-5.6-luna",
+        )
+        assert cost == pytest.approx(sum(GPT56_LUNA_PRICING.values()))
+        fam = family_for_model("openai.gpt-5.6-luna")
+        assert fam is not None and fam.key == "gpt-5.6-luna"
 
     def test_nova_unpriced_returns_none(self):
         # Family matches (nova) but rates are None — placeholder.
