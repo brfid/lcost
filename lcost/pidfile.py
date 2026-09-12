@@ -1,12 +1,8 @@
 """Single-instance guard via an advisory lock on a PID file.
 
-Prevents a second TUI from launching while one is already running —
-e.g. an orphaned TUI from a closed terminal whose source files have
-since moved, as happened with ai_cost_tracker.py.
-
-Uses ``fcntl.flock`` (POSIX advisory), so the lock is released
-automatically by the kernel when the process exits — even on ``kill
--9``. No stale-PID cleanup needed.
+Uses ``fcntl.flock`` on macOS and Linux. The kernel releases the lock
+when the process exits. A second dashboard either reports the holder
+or, with ``force=True``, waits for the lock to become available.
 """
 
 from __future__ import annotations
@@ -30,7 +26,7 @@ class AlreadyRunning(RuntimeError):
         who = f"PID {pid}" if pid else "another process"
         super().__init__(
             f"lcost TUI is already running ({who}, lock at {path}). "
-            f"Use --force to override."
+            f"Use --force to wait for it to exit."
         )
 
 
@@ -60,7 +56,7 @@ def single_instance(
     """Context manager that acquires an exclusive lock on ``path``.
 
     Yields the resolved pidfile path. Raises :class:`AlreadyRunning` if
-    another process holds the lock, unless ``force=True``.
+    another process holds the lock; ``force=True`` waits instead.
 
     On successful acquisition, writes the current PID into the file.
     Releases the lock (and truncates the file) on context exit.

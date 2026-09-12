@@ -11,12 +11,9 @@ import math
 from typing import Dict, Mapping, Optional, TypedDict
 
 from .formatters import (
-    FIELD_CACHE_READS,
     FIELD_CACHE_SAVINGS,
-    FIELD_CACHE_WRITES,
     FIELD_COST,
-    FIELD_TOKENS_IN,
-    FIELD_TOKENS_OUT,
+    TOKEN_FIELDS,
 )
 from .pricing import pricing_reference_for_model
 
@@ -43,12 +40,6 @@ class UsageEntry(TypedDict, total=False):
     pricingRef: str
 
 
-_TOKEN_FIELDS = (
-    FIELD_TOKENS_IN,
-    FIELD_TOKENS_OUT,
-    FIELD_CACHE_WRITES,
-    FIELD_CACHE_READS,
-)
 _MONEY_FIELDS = (FIELD_COST, FIELD_CACHE_SAVINGS)
 
 
@@ -60,7 +51,7 @@ def normalize_usage_entry(entry: Mapping[str, object]) -> Dict[str, object]:
     money values retain their supplied precision.
     """
     normalized: Dict[str, object] = dict(entry)
-    for field in _TOKEN_FIELDS:
+    for field in TOKEN_FIELDS:
         normalized[field] = _token_value(normalized.get(field))
     for field in _MONEY_FIELDS:
         normalized[field] = _money_value(normalized.get(field))

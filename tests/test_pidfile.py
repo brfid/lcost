@@ -5,7 +5,7 @@ Exercises:
     * second acquire in a subprocess → raises AlreadyRunning with the
       holder's PID
     * release → lock is available again and file is truncated
-    * ``force=True`` → acquires even while another process holds it
+    * ``force=True`` → waits until the current holder releases it
     * default path honors ``XDG_CACHE_HOME``
 """
 

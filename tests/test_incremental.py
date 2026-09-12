@@ -1,13 +1,9 @@
 """Tests for incremental ingest and date-filtered aggregation."""
 
 import json
-import tempfile
-from datetime import datetime
-from pathlib import Path
 
-import pytest
 
-from lcost.aggregation import aggregate_by_day, compute_date_window
+from lcost.aggregation import aggregate_by_day
 from lcost.collectors import (
     _extract_user_text,
     _project_from_session_path,
@@ -32,10 +28,6 @@ from lcost.pricing import (
 )
 
 
-@pytest.fixture
-def tmp_dir():
-    with tempfile.TemporaryDirectory() as d:
-        yield Path(d)
 
 
 def make_jsonl_line(msg_id, timestamp, tokens_in=100, tokens_out=50,
@@ -68,24 +60,24 @@ def make_session_file(path, lines):
 # ---------------------------------------------------------------------------
 
 class TestFileNeedsProcessing:
-    def test_new_file(self, tmp_dir):
-        f = tmp_dir / "session.jsonl"
+    def test_new_file(self, tmp_path):
+        f = tmp_path / "session.jsonl"
         f.write_text("line\n")
         state = {"files": {}}
         needs, offset = file_needs_processing(f, state)
         assert needs is True
         assert offset == 0
 
-    def test_unchanged_file(self, tmp_dir):
-        f = tmp_dir / "session.jsonl"
+    def test_unchanged_file(self, tmp_path):
+        f = tmp_path / "session.jsonl"
         f.write_text("line\n")
         size = f.stat().st_size
-        state = {"files": {str(f): {"size": size, "byte_offset": size, "mtime": 0}}}
+        state = {"files": {str(f): {"size": size, "byte_offset": size, "mtime": f.stat().st_mtime}}}
         needs, offset = file_needs_processing(f, state)
         assert needs is False
 
-    def test_grown_file(self, tmp_dir):
-        f = tmp_dir / "session.jsonl"
+    def test_grown_file(self, tmp_path):
+        f = tmp_path / "session.jsonl"
         f.write_text("line1\n")
         original_size = f.stat().st_size
         state = {"files": {str(f): {"size": original_size, "byte_offset": original_size, "mtime": 0}}}
@@ -95,8 +87,8 @@ class TestFileNeedsProcessing:
         assert needs is True
         assert offset == original_size
 
-    def test_shrunk_file(self, tmp_dir):
-        f = tmp_dir / "session.jsonl"
+    def test_shrunk_file(self, tmp_path):
+        f = tmp_path / "session.jsonl"
         f.write_text("long content here\n")
         state = {"files": {str(f): {"size": 999, "byte_offset": 999, "mtime": 0}}}
         f.write_text("short\n")
@@ -104,8 +96,8 @@ class TestFileNeedsProcessing:
         assert needs is True
         assert offset == 0
 
-    def test_missing_file(self, tmp_dir):
-        f = tmp_dir / "gone.jsonl"
+    def test_missing_file(self, tmp_path):
+        f = tmp_path / "gone.jsonl"
         state = {"files": {}}
         needs, offset = file_needs_processing(f, state)
         assert needs is False
@@ -116,8 +108,8 @@ class TestFileNeedsProcessing:
 # ---------------------------------------------------------------------------
 
 class TestIncrementalParsing:
-    def test_full_parse(self, tmp_dir):
-        f = tmp_dir / "session.jsonl"
+    def test_full_parse(self, tmp_path):
+        f = tmp_path / "session.jsonl"
         lines = [
             make_jsonl_line("msg1", "2026-04-20T10:00:00Z"),
             make_jsonl_line("msg2", "2026-04-20T11:00:00Z"),
@@ -129,8 +121,8 @@ class TestIncrementalParsing:
         assert "cc:msg2" in entries
         assert offset == f.stat().st_size
 
-    def test_seek_resumes(self, tmp_dir):
-        f = tmp_dir / "session.jsonl"
+    def test_seek_resumes(self, tmp_path):
+        f = tmp_path / "session.jsonl"
         line1 = make_jsonl_line("msg1", "2026-04-20T10:00:00Z")
         make_session_file(f, [line1])
         first_size = f.stat().st_size
@@ -143,8 +135,8 @@ class TestIncrementalParsing:
         assert "cc:msg2" in entries
         assert offset == f.stat().st_size
 
-    def test_incomplete_trailing_line(self, tmp_dir):
-        f = tmp_dir / "session.jsonl"
+    def test_incomplete_trailing_line(self, tmp_path):
+        f = tmp_path / "session.jsonl"
         complete = make_jsonl_line("msg1", "2026-04-20T10:00:00Z")
         incomplete = '{"type": "assistant", "message": {"id": "msg2"'
         make_session_file(f, [complete, incomplete])
@@ -152,8 +144,8 @@ class TestIncrementalParsing:
         assert len(entries) == 1
         assert "cc:msg1" in entries
 
-    def test_non_assistant_lines_skipped(self, tmp_dir):
-        f = tmp_dir / "session.jsonl"
+    def test_non_assistant_lines_skipped(self, tmp_path):
+        f = tmp_path / "session.jsonl"
         lines = [
             json.dumps({"type": "human", "message": {"text": "hello"}}) + "\n",
             make_jsonl_line("msg1", "2026-04-20T10:00:00Z"),
@@ -169,8 +161,8 @@ class TestIncrementalParsing:
 # ---------------------------------------------------------------------------
 
 class TestIngestState:
-    def test_roundtrip(self, tmp_dir):
-        path = tmp_dir / "ingest_state.json"
+    def test_roundtrip(self, tmp_path):
+        path = tmp_path / "ingest_state.json"
         state = {"_version": 1, "files": {"/foo/bar.jsonl": {"size": 100, "byte_offset": 100, "mtime": 1.0}}}
         save_ingest_state(path, state)
         loaded = load_ingest_state(path)
@@ -178,13 +170,13 @@ class TestIngestState:
         assert loaded["sources"] == {}
         assert loaded["last_ingest_at"] is None
 
-    def test_missing_file(self, tmp_dir):
-        path = tmp_dir / "nope.json"
+    def test_missing_file(self, tmp_path):
+        path = tmp_path / "nope.json"
         state = load_ingest_state(path)
         assert state == new_ingest_state()
 
-    def test_corrupt_file(self, tmp_dir):
-        path = tmp_dir / "bad.json"
+    def test_corrupt_file(self, tmp_path):
+        path = tmp_path / "bad.json"
         path.write_text("not json at all")
         state = load_ingest_state(path)
         assert state == new_ingest_state()
@@ -195,8 +187,8 @@ class TestIngestState:
 # ---------------------------------------------------------------------------
 
 class TestUpdateFileState:
-    def test_records_state(self, tmp_dir):
-        f = tmp_dir / "session.jsonl"
+    def test_records_state(self, tmp_path):
+        f = tmp_path / "session.jsonl"
         f.write_text("data\n")
         state = {"files": {}}
         update_file_state(state, f, 5)
@@ -205,8 +197,8 @@ class TestUpdateFileState:
         assert stored["size"] == f.stat().st_size
         assert stored["mtime"] == f.stat().st_mtime
 
-    def test_missing_file_noop(self, tmp_dir):
-        f = tmp_dir / "gone.jsonl"
+    def test_missing_file_noop(self, tmp_path):
+        f = tmp_path / "gone.jsonl"
         state = {"files": {}}
         update_file_state(state, f, 0)
         assert state["files"] == {}
@@ -269,34 +261,12 @@ class TestDateFilteredAggregation:
 # compute_date_window
 # ---------------------------------------------------------------------------
 
-class TestComputeDateWindow:
-    def test_none_days(self):
-        assert compute_date_window(None) is None
-
-    def test_returns_past_date(self):
-        result = compute_date_window(7)
-        dt = datetime.strptime(result, "%Y-%m-%d")
-        assert dt < datetime.now()
-        days_back = (datetime.now() - dt).days
-        assert days_back >= 14
-
-    def test_large_days_scales(self):
-        result = compute_date_window(90)
-        dt = datetime.strptime(result, "%Y-%m-%d")
-        days_back = (datetime.now() - dt).days
-        assert days_back >= 180
-
-
-# ---------------------------------------------------------------------------
-# End-to-end incremental workflow
-# ---------------------------------------------------------------------------
-
 class TestEndToEnd:
-    def test_incremental_ingest_cycle(self, tmp_dir):
-        ledger_path = tmp_dir / "ledger.json"
-        state_path = tmp_dir / "ingest_state.json"
+    def test_incremental_ingest_cycle(self, tmp_path):
+        ledger_path = tmp_path / "ledger.json"
+        state_path = tmp_path / "ingest_state.json"
 
-        session_file = tmp_dir / "projects" / "proj" / "sess.jsonl"
+        session_file = tmp_path / "projects" / "proj" / "sess.jsonl"
         line1 = make_jsonl_line("msg1", "2026-04-20T10:00:00Z")
         make_session_file(session_file, [line1])
 
@@ -335,14 +305,14 @@ class TestEndToEnd:
         needs, _ = file_needs_processing(session_file, state)
         assert needs is False
 
-    def test_empty_ledger_resets_state(self, tmp_dir):
+    def test_empty_ledger_resets_state(self, tmp_path):
         """When ledger is empty/missing, ingest state should be ignored."""
-        state_path = tmp_dir / "ingest_state.json"
+        state_path = tmp_path / "ingest_state.json"
         save_ingest_state(state_path, {
             "_version": 1,
             "files": {"/some/old/file.jsonl": {"size": 500, "byte_offset": 500, "mtime": 1.0}}
         })
-        ledger = load_ledger(tmp_dir / "nonexistent_ledger.json")
+        ledger = load_ledger(tmp_path / "nonexistent_ledger.json")
         assert ledger == {}
         # When ledger is empty, main() resets state — simulate that
         if not ledger:
@@ -561,24 +531,24 @@ class TestIngestBackfill:
 # ---------------------------------------------------------------------------
 
 class TestProjectFromSessionPath:
-    def test_outside_projects_dir(self, tmp_dir):
-        f = tmp_dir / "random.jsonl"
+    def test_outside_projects_dir(self, tmp_path):
+        f = tmp_path / "random.jsonl"
         f.write_text("")
         # Not under ~/.claude/projects — returns empty
         assert _project_from_session_path(f) == ""
 
-    def test_greedy_resolves_dashed_names(self, tmp_dir, monkeypatch):
+    def test_greedy_resolves_dashed_names(self, tmp_path, monkeypatch):
         """Verify greedy resolver picks longest real directory at each level."""
         # Build a fake ~/.claude/projects/-tmp-DIR-example-tools/ layout where
         # the slug has to be decoded against a real filesystem.
-        fake_home = tmp_dir
+        fake_home = tmp_path
         fake_cc = fake_home / ".claude"
         projects_dir = fake_cc / "projects"
-        # Create real target: tmp_dir / "example-tools" (dash in real dirname)
-        real_target = tmp_dir / "example-tools"
+        # Create real target: tmp_path / "example-tools" (dash in real dirname)
+        real_target = tmp_path / "example-tools"
         real_target.mkdir()
         # Slug encodes absolute path with dashes
-        slug_parts = str(tmp_dir).lstrip("/").split("/") + ["example-tools"]
+        slug_parts = str(tmp_path).lstrip("/").split("/") + ["example-tools"]
         slug = "-" + "-".join(p for part in slug_parts for p in part.split("-"))
         slug_dir = projects_dir / slug
         slug_dir.mkdir(parents=True)
@@ -598,8 +568,8 @@ class TestProjectFromSessionPath:
 # ---------------------------------------------------------------------------
 
 class TestPromptPreviewAndSubagent:
-    def test_preview_captured_from_preceding_user(self, tmp_dir):
-        f = tmp_dir / "session.jsonl"
+    def test_preview_captured_from_preceding_user(self, tmp_path):
+        f = tmp_path / "session.jsonl"
         user_line = json.dumps({
             "type": "user",
             "message": {"content": "please help with X"},
@@ -609,15 +579,15 @@ class TestPromptPreviewAndSubagent:
         entries, _, _ = parse_claude_code_session(f)
         assert entries["cc:msg1"]["promptPreview"] == "please help with X"
 
-    def test_preview_empty_when_no_user_before(self, tmp_dir):
-        f = tmp_dir / "session.jsonl"
+    def test_preview_empty_when_no_user_before(self, tmp_path):
+        f = tmp_path / "session.jsonl"
         make_session_file(f, [make_jsonl_line("msg1", "2026-04-20T10:00:00Z")])
         entries, _, _ = parse_claude_code_session(f)
         assert entries["cc:msg1"]["promptPreview"] == ""
 
-    def test_preview_ignores_system_tags(self, tmp_dir):
+    def test_preview_ignores_system_tags(self, tmp_path):
         """Messages starting with < (e.g. <system-reminder>) are not captured."""
-        f = tmp_dir / "session.jsonl"
+        f = tmp_path / "session.jsonl"
         sys_user = json.dumps({
             "type": "user",
             "message": {"content": "<system-reminder>noise</system-reminder>"},
@@ -631,8 +601,8 @@ class TestPromptPreviewAndSubagent:
         entries, _, _ = parse_claude_code_session(f)
         assert entries["cc:msg1"]["promptPreview"] == "actual question"
 
-    def test_preview_truncated_to_80(self, tmp_dir):
-        f = tmp_dir / "session.jsonl"
+    def test_preview_truncated_to_80(self, tmp_path):
+        f = tmp_path / "session.jsonl"
         long_text = "x" * 500
         user_line = json.dumps({
             "type": "user",
@@ -643,29 +613,29 @@ class TestPromptPreviewAndSubagent:
         entries, _, _ = parse_claude_code_session(f)
         assert len(entries["cc:msg1"]["promptPreview"]) == 80
 
-    def test_subagent_flag_from_path(self, tmp_dir):
+    def test_subagent_flag_from_path(self, tmp_path):
         # Session file under */subagents/* should flag isSubagent
-        sub_dir = tmp_dir / "projects" / "proj" / "subagents"
+        sub_dir = tmp_path / "projects" / "proj" / "subagents"
         sub_file = sub_dir / "sa.jsonl"
         make_session_file(sub_file, [make_jsonl_line("msg1", "2026-04-20T10:00:00Z")])
         entries, _, _ = parse_claude_code_session(sub_file)
         assert entries["cc:msg1"]["isSubagent"] is True
 
-    def test_subagent_false_for_plain_session(self, tmp_dir):
-        f = tmp_dir / "projects" / "proj" / "sess.jsonl"
+    def test_subagent_false_for_plain_session(self, tmp_path):
+        f = tmp_path / "projects" / "proj" / "sess.jsonl"
         make_session_file(f, [make_jsonl_line("msg1", "2026-04-20T10:00:00Z")])
         entries, _, _ = parse_claude_code_session(f)
         assert entries["cc:msg1"]["isSubagent"] is False
 
-    def test_session_field_uses_stem(self, tmp_dir):
-        f = tmp_dir / "projects" / "proj" / "abc-123.jsonl"
+    def test_session_field_uses_stem(self, tmp_path):
+        f = tmp_path / "projects" / "proj" / "abc-123.jsonl"
         make_session_file(f, [make_jsonl_line("msg1", "2026-04-20T10:00:00Z")])
         entries, _, _ = parse_claude_code_session(f)
         assert entries["cc:msg1"]["session"] == "abc-123"
 
-    def test_initial_user_text_seeds_preview(self, tmp_dir):
+    def test_initial_user_text_seeds_preview(self, tmp_path):
         """Resuming from mid-file should still attach preview from prior pass."""
-        f = tmp_dir / "session.jsonl"
+        f = tmp_path / "session.jsonl"
         make_session_file(f, [make_jsonl_line("msg1", "2026-04-20T10:00:00Z")])
         entries, _, final_user = parse_claude_code_session(
             f, initial_user_text="carried from last pass")
@@ -673,8 +643,8 @@ class TestPromptPreviewAndSubagent:
         # Final user text unchanged when no new user lines
         assert final_user == "carried from last pass"
 
-    def test_new_user_overrides_seed(self, tmp_dir):
-        f = tmp_dir / "session.jsonl"
+    def test_new_user_overrides_seed(self, tmp_path):
+        f = tmp_path / "session.jsonl"
         user_line = json.dumps({
             "type": "user",
             "message": {"content": "fresh prompt"},

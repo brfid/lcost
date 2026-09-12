@@ -6,6 +6,7 @@ offsets, last-ingest timestamp) lives in `ingest_state.py`.
 
 import contextlib
 import shutil
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -20,17 +21,18 @@ from .formatters import (
     FIELD_TOKENS_OUT,
     data_dir,
 )
+# Preserve the original ledger-module imports for existing callers.
 from .ingest_state import (
-    file_needs_processing,
-    get_ingest_state_path,
-    get_stored_user_text,
-    hours_since_last_ingest,
-    load_ingest_state,
-    new_ingest_state,
-    prune_orphan_file_state,
-    save_ingest_state,
-    stamp_ingest,
-    update_file_state,
+    file_needs_processing as file_needs_processing,
+    get_ingest_state_path as get_ingest_state_path,
+    get_stored_user_text as get_stored_user_text,
+    hours_since_last_ingest as hours_since_last_ingest,
+    load_ingest_state as load_ingest_state,
+    new_ingest_state as new_ingest_state,
+    prune_orphan_file_state as prune_orphan_file_state,
+    save_ingest_state as save_ingest_state,
+    stamp_ingest as stamp_ingest,
+    update_file_state as update_file_state,
 )
 from .pricing import (
     calculate_cache_savings,
@@ -106,7 +108,13 @@ _CLINE_MUTABLE_FIELDS = frozenset({
 })
 
 
-def ingest(ledger: Dict[str, Dict], new_entries: Dict[str, Dict]) -> int:
+@dataclass(frozen=True)
+class MergeResult:
+    added: int
+    updated: int
+
+
+def merge_entries(ledger: Dict[str, Dict], new_entries: Dict[str, Dict]) -> MergeResult:
     """Merge new entries into the ledger.
 
     For existing entries, fills in any keys that are missing — this covers
@@ -121,27 +129,40 @@ def ingest(ledger: Dict[str, Dict], new_entries: Dict[str, Dict]) -> int:
     numbers.
 
     Returns:
-      Count of previously-unseen entries added.
+      Counts of added and updated records, so corrections are persisted too.
     """
     added = 0
+    updated = 0
     for entry_id, entry_data in new_entries.items():
         entry_data = normalize_usage_entry(entry_data)
         if entry_id not in ledger:
             ledger[entry_id] = entry_data
             added += 1
+        elif not isinstance(ledger[entry_id], dict):
+            ledger[entry_id] = entry_data
+            updated += 1
         else:
             existing = ledger[entry_id]
+            changed = False
             is_cline = existing.get('source') == 'cline'
             for k, v in entry_data.items():
-                if k not in existing:
+                if k not in existing or existing[k] is None:
                     if v not in (None, ""):
                         existing[k] = v
+                        changed = True
                 elif is_cline and k in _CLINE_MUTABLE_FIELDS:
                     # Overwrite a stored zero with a real value from a
                     # completed (backfilled) Cline api_req message.
                     if v and not existing[k]:
                         existing[k] = v
-    return added
+                        changed = True
+            updated += changed
+    return MergeResult(added, updated)
+
+
+def ingest(ledger: Dict[str, Dict], new_entries: Dict[str, Dict]) -> int:
+    """Merge records and return the number added (legacy public interface)."""
+    return merge_entries(ledger, new_entries).added
 
 
 def recalc_ledger_costs(ledger_path: Path, ledger: Dict[str, Dict],

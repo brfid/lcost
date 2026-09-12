@@ -44,15 +44,20 @@ def hours_since_last_ingest(state: Dict) -> Optional[float]:
       Hours since the timestamp in ``state["last_ingest_at"]``, or ``None``
       if the field is missing or malformed.
     """
-    ts = state.get("last_ingest_at")
-    if not ts:
+    seconds = timestamp_age(state.get("last_ingest_at"))
+    return None if seconds is None else seconds / 3600
+
+
+def timestamp_age(timestamp: object, now: Optional[datetime] = None) -> Optional[float]:
+    """Seconds since a local-naive or offset-bearing timestamp, if valid."""
+    if not isinstance(timestamp, str):
         return None
     try:
-        prev = datetime.fromisoformat(ts)
-    except (TypeError, ValueError):
+        prev = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        now = now or datetime.now()
+        return max(0, now.astimezone().timestamp() - prev.astimezone().timestamp())
+    except (ValueError, OverflowError, OSError):
         return None
-    delta = datetime.now() - prev
-    return delta.total_seconds() / 3600.0
 
 
 def stamp_ingest(state: Dict) -> None:
@@ -121,8 +126,11 @@ def file_needs_processing(filepath: Path, state: Dict) -> Tuple[bool, int]:
 
     stored_size = stored.get("size", 0)
 
-    if stat.st_size == stored_size:
+    if stat.st_size == stored_size and stat.st_mtime == stored.get("mtime"):
         return False, 0
+
+    if stat.st_size == stored_size:
+        return True, 0
 
     if stat.st_size < stored_size:
         return True, 0

@@ -12,7 +12,7 @@ def load_json(path: Path, default, validate=None):
     if not path.exists():
         return default
     try:
-        with open(path, 'r') as f:
+        with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         if validate and not validate(data):
             return default
@@ -26,9 +26,9 @@ def atomic_json_write(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix='.tmp')
     try:
-        with os.fdopen(fd, 'w') as f:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
             json.dump(data, f, separators=(',', ':'))
-        os.rename(tmp_path, path)
+        os.replace(tmp_path, path)
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(tmp_path)
