@@ -14,6 +14,9 @@ dependencies = [
     "textual-plotext>=0.2",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
 [project.scripts]
 lcost = "lcost.cli:main"
 

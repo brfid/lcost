@@ -29,7 +29,7 @@ from .ingest_state import (
     save_ingest_state,
     stamp_ingest,
 )
-from .ledger import ingest, rotate_backup, save_ledger
+from .ledger import merge_entries, rotate_backup, save_ledger
 
 DEFAULT_MAX_GAP_HOURS = 24.0
 
@@ -124,8 +124,8 @@ def run_ingest(ledger_path: Path, ledger: Dict, source: str = "all",
         )
         new_entries.update(entries)
 
-    added = ingest(ledger, new_entries)
-    if added > 0:
+    result = merge_entries(ledger, new_entries)
+    if result.added or result.updated:
         save_ledger(ledger_path, ledger)
 
     # Drop stale file-state entries (files Claude Code has since deleted).
@@ -141,4 +141,4 @@ def run_ingest(ledger_path: Path, ledger: Dict, source: str = "all",
     if not quiet and pruned > 0:
         print(f"Pruned {pruned} orphan file-state entries")
 
-    return added
+    return result.added

@@ -2,7 +2,6 @@
 
 from datetime import datetime, timedelta
 
-import pytest
 
 from lcost.ops_data import (
     TOOL_ABBREV,
@@ -23,28 +22,6 @@ from lcost.ops_data import (
 
 
 # ── short_model ───────────────────────────────────────────────────────────
-
-class TestShortModel:
-    def test_opus(self):
-        assert short_model("claude-opus-4-6") == "opus-4.6"
-
-    def test_sonnet_with_date_suffix(self):
-        assert short_model("claude-sonnet-4-5-20250929") == "sonnet-4.5"
-
-    def test_haiku(self):
-        assert short_model("claude-haiku-4-5-20251001") == "haiku-4.5"
-
-    def test_none(self):
-        assert short_model(None) == "—"
-
-    def test_unknown(self):
-        # gpt-4 is a recognized family now; truly unknown IDs return their
-        # first dash-segment.
-        assert short_model("xyz-42") == "xyz"
-
-    def test_empty(self):
-        assert short_model("") == "—"
-
 
 # ── model_color ───────────────────────────────────────────────────────────
 

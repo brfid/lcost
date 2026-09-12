@@ -1,11 +1,14 @@
 """CLI argument parsing, ledger stats, and main entry point."""
 
 import argparse
+import math
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
-from .aggregation import aggregate_by_day, compute_date_window, entry_local_dt, format_output
+from .aggregation import aggregate_by_day, entry_local_dt, format_output, iter_entries
+from .demo import build_demo_ledger
 from .formatters import (
     SOURCES,
     SOURCE_CLI_CHOICES,
@@ -18,9 +21,34 @@ from .ingest_state import (
     hours_since_last_ingest,
     load_ingest_state,
     source_health,
+    timestamp_age,
 )
 from .ledger import backup_dir, get_ledger_path, load_ledger, recalc_ledger_costs
 from .pipeline import run_ingest
+
+
+def _positive_days(value: str) -> int:
+    number = int(value)
+    if number <= 0:
+        raise argparse.ArgumentTypeError("days must be positive")
+    return number
+
+
+def _positive_hours(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("hours must be finite and positive")
+    return number
+
+
+def _iso_date(value: str) -> str:
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("date must be YYYY-MM-DD") from exc
+    if parsed.strftime("%Y-%m-%d") != value:
+        raise argparse.ArgumentTypeError("date must be YYYY-MM-DD")
+    return value
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -30,21 +58,26 @@ def parse_arguments() -> argparse.Namespace:
         epilog="""
 Examples:
   lcost                       # Interactive dashboard (default)
+  lcost --demo                # Populated dashboard with built-in sample data
   lcost --report              # Text report, last 30 active days
-  lcost --report --days 7     # Last 7 active days
+  lcost --report --days 7      # Last 7 active days
   lcost --report --all        # All days with activity
   lcost --source cline        # Dashboard, Cline only
   lcost --source claude-code  # Dashboard, Claude Code only
   lcost --source codex        # Dashboard, Codex / ChatGPT only
   lcost --cached              # Skip scanning live sources
   lcost --rescan              # Rescan all files from scratch
-  lcost --deep                # Re-parse every file (dedups; data-safe)
+  lcost --deep                # Re-parse files and retain the ledger
   lcost --stats               # Print ledger stats and exit
   lcost --recalc --dry-run    # Preview cost correction without writing
   lcost --recalc              # Rewrite ledger costs using current rates
         """
     )
     mode = parser.add_mutually_exclusive_group()
+    parser.add_argument(
+        '--demo', action='store_true',
+        help='use built-in sample data without reading or writing personal usage'
+    )
     mode.add_argument(
         '--report', action='store_true',
         help='print text report instead of launching dashboard'
@@ -58,8 +91,8 @@ Examples:
         help='recompute cost/savings in ledger using current rates, then exit'
     )
     parser.add_argument(
-        '--days', type=int, default=30, metavar='N',
-        help='number of most recent active days to display (default: 30)'
+        '--days', type=_positive_days, metavar='N',
+        help='report: last N active days (default: 30); dashboard: last N calendar days'
     )
     parser.add_argument(
         '--all', action='store_true',
@@ -75,11 +108,11 @@ Examples:
         help='filter to entries whose project path matches this substring'
     )
     parser.add_argument(
-        '--from', dest='date_from', metavar='YYYY-MM-DD',
+        '--from', dest='date_from', type=_iso_date, metavar='YYYY-MM-DD',
         help='include only entries on or after this date'
     )
     parser.add_argument(
-        '--to', dest='date_to', metavar='YYYY-MM-DD',
+        '--to', dest='date_to', type=_iso_date, metavar='YYYY-MM-DD',
         help='include only entries on or before this date'
     )
     parser.add_argument(
@@ -108,20 +141,24 @@ Examples:
     )
     parser.add_argument(
         '--deep', action='store_true',
-        help='re-parse every session file from byte 0 (keeps ledger entries; '
-             'dedups by msg_id). Use when you suspect missed data.'
+        help='re-parse available sessions, retaining ledger entries and '
+             'deduplicating by entry ID'
     )
     parser.add_argument(
-        '--max-gap-hours', type=float, default=24.0, metavar='H',
+        '--max-gap-hours', type=_positive_hours, default=24.0, metavar='H',
         help='if last ingest was more than H hours ago, auto-promote to '
              'deep rescan (default: 24)'
     )
     parser.add_argument(
         '--force', action='store_true',
-        help='override the single-instance lock and launch the TUI even '
-             'if another lcost TUI appears to be running'
+        help='wait for another dashboard to release its lock, then start'
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.demo and (args.stats or args.recalc):
+        parser.error("--demo is available for the dashboard and --report")
+    if args.date_from and args.date_to and args.date_from > args.date_to:
+        parser.error("--from must be on or before --to")
+    return args
 
 
 def _format_bytes(size_bytes: int) -> str:
@@ -137,9 +174,8 @@ def _format_age(timestamp: object) -> str:
     """Return a concise local age for persisted ingest timestamps."""
     if not isinstance(timestamp, str):
         return "never"
-    try:
-        elapsed = max(0, (datetime.now() - datetime.fromisoformat(timestamp)).total_seconds())
-    except ValueError:
+    elapsed = timestamp_age(timestamp)
+    if elapsed is None:
         return "unknown"
     if elapsed < 60:
         return "now"
@@ -166,6 +202,8 @@ def print_ledger_stats(ledger_path: Path, ledger: Dict[str, Dict]) -> None:
     subagent_count = 0
 
     for entry in ledger.values():
+        if not isinstance(entry, dict):
+            continue
         src = entry.get('source', '?')
         by_source[src] = by_source.get(src, 0) + 1
         proj = entry.get('project', '')
@@ -237,8 +275,11 @@ def main():
         print("--dry-run only applies with --recalc")
         return 2
 
-    ledger_path = get_ledger_path(args.ledger_path)
-    ledger = load_ledger(ledger_path)
+    ledger_path = None
+    ledger = {}
+    if args.report or args.stats or args.recalc:
+        ledger_path = None if args.demo else get_ledger_path(args.ledger_path)
+        ledger = build_demo_ledger() if args.demo else load_ledger(ledger_path)
 
     if args.recalc:
         dry = args.dry_run
@@ -248,8 +289,8 @@ def main():
         label = "[dry run] " if dry else ""
         print(f"{label}Entries changed: {changed:,}")
         if skipped:
-            print(f"{label}Entries skipped: {skipped:,} (model has no "
-                  f"configured pricing; cost preserved)")
+            print(f"{label}Entries skipped: {skipped:,} (incomplete token data or "
+                  f"no configured pricing; cost preserved)")
         print(f"{label}Old total: ${old:,.2f}")
         print(f"{label}New total: ${new:,.2f}")
         print(f"{label}Difference: ${new - old:,.2f}")
@@ -265,16 +306,23 @@ def main():
         try:
             from lcost.tui import CostTrackerApp
         except ImportError:
-            print("TUI requires: pip install 'lcost[tui]'")
+            print("Dashboard dependencies are missing. Reinstall with: pip install -e .")
             return 1
         from lcost.pidfile import AlreadyRunning, single_instance
         try:
-            with single_instance(force=args.force):
+            with (nullcontext() if args.demo else single_instance(force=args.force)):
                 app = CostTrackerApp(
                     ledger_path_override=args.ledger_path,
                     source_filter=args.source,
                     no_ingest=args.cached,
                     force_ingest=args.rescan,
+                    project_filter=args.project,
+                    date_from=args.date_from,
+                    date_to=args.date_to,
+                    days=None if args.all else args.days,
+                    deep=args.deep,
+                    max_gap_hours=args.max_gap_hours,
+                    demo=args.demo,
                 )
                 app.run()
         except AlreadyRunning as exc:
@@ -282,7 +330,7 @@ def main():
             return 1
         return 0
 
-    added = run_ingest(ledger_path, ledger, source=args.source,
+    added = 0 if args.demo else run_ingest(ledger_path, ledger, source=args.source,
                        no_ingest=args.cached, force_ingest=args.rescan,
                        verbose=args.verbose, quiet=args.quiet,
                        max_gap_hours=args.max_gap_hours, deep=args.deep)
@@ -291,8 +339,8 @@ def main():
 
     source_filter = None if args.source == 'all' else SOURCE_MAP.get(args.source, args.source)
 
-    limit_days = None if args.all else args.days
-    date_from = args.date_from or compute_date_window(limit_days)
+    limit_days = None if args.all or args.date_from or args.date_to else (args.days or 30)
+    date_from = args.date_from
     date_to = args.date_to
 
     daily_data = aggregate_by_day(ledger, source_filter=source_filter,
@@ -300,13 +348,15 @@ def main():
                                   project_filter=args.project)
 
     sources_in_data = set()
-    for entry in ledger.values():
+    for _, _, entry in iter_entries(ledger):
         src = entry.get('source')
         if source_filter is None or src == source_filter:
             sources_in_data.add(src)
 
     title_parts = [SOURCE_DISPLAY.get(s, s) for s in sorted(sources_in_data)]
     title = (" + ".join(title_parts) + " " if title_parts else "") + "Daily Cost Summary"
+    if args.demo:
+        title = "DEMO DATA — " + title
 
     if not args.quiet:
         print()

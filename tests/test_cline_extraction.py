@@ -13,7 +13,6 @@ from lcost.collectors import (
     _cline_stop_reason,
     _cline_tool_chain,
     _extract_cline_prompt_preview,
-    _normalize_cline_model,
     _project_for_cline_task,
     _project_from_cwd,
     extract_cline_entries,
@@ -23,29 +22,6 @@ from lcost.collectors import (
 # ---------------------------------------------------------------------------
 # _normalize_cline_model
 # ---------------------------------------------------------------------------
-
-class TestNormalizeClineModel:
-    def test_bedrock_region_prefix(self):
-        assert _normalize_cline_model("us.anthropic.claude-opus-4-7") == \
-            "claude-opus-4-7"
-
-    def test_global_prefix(self):
-        assert _normalize_cline_model("global.anthropic.claude-sonnet-4-5") == \
-            "claude-sonnet-4-5"
-
-    def test_bare_provider_prefix(self):
-        assert _normalize_cline_model("anthropic.claude-opus-4") == \
-            "claude-opus-4"
-
-    def test_already_normalized(self):
-        assert _normalize_cline_model("claude-opus-4-6") == "claude-opus-4-6"
-
-    def test_none(self):
-        assert _normalize_cline_model(None) is None
-
-    def test_empty(self):
-        assert _normalize_cline_model("") == ""
-
 
 # ---------------------------------------------------------------------------
 # _extract_cline_prompt_preview

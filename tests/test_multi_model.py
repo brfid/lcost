@@ -29,32 +29,20 @@ from lcost.pricing import (
 
 # ── _normalize_cline_model ────────────────────────────────────────────────
 
-class TestNormalizeClineModel:
-    def test_anthropic_bedrock(self):
-        assert _normalize_cline_model("us.anthropic.claude-opus-4-7") == "claude-opus-4-7"
-        assert _normalize_cline_model(
-            "global.anthropic.claude-sonnet-4-5-1"
-        ) == "claude-sonnet-4-5-1"
-
-    def test_openai_bedrock(self):
-        assert _normalize_cline_model("us.openai.gpt-5-5") == "gpt-5-5"
-        assert _normalize_cline_model("openai.gpt-5-mini") == "gpt-5-mini"
-
-    def test_amazon_nova(self):
-        assert _normalize_cline_model("us.amazon.nova-pro-v1") == "nova-pro-v1"
-
-    def test_meta_llama(self):
-        assert _normalize_cline_model("us.meta.llama-4-70b-instruct") == "llama-4-70b-instruct"
-
-    def test_mistral(self):
-        assert _normalize_cline_model("eu.mistral.mistral-large-2") == "mistral-large-2"
-
-    def test_no_prefix_passthrough(self):
-        assert _normalize_cline_model("claude-opus-4-7") == "claude-opus-4-7"
-
-    def test_none_and_empty(self):
-        assert _normalize_cline_model(None) is None
-        assert _normalize_cline_model("") == ""
+@pytest.mark.parametrize("raw, expected", [
+    ("us.anthropic.claude-opus-4-7", "claude-opus-4-7"),
+    ("global.anthropic.claude-sonnet-4-5", "claude-sonnet-4-5"),
+    ("global.anthropic.claude-sonnet-4-5-1", "claude-sonnet-4-5-1"),
+    ("anthropic.claude-opus-4", "claude-opus-4"),
+    ("claude-opus-4-6", "claude-opus-4-6"),
+    ("us.openai.gpt-5-5", "gpt-5-5"), ("openai.gpt-5-mini", "gpt-5-mini"),
+    ("us.amazon.nova-pro-v1", "nova-pro-v1"),
+    ("us.meta.llama-4-70b-instruct", "llama-4-70b-instruct"),
+    ("eu.mistral.mistral-large-2", "mistral-large-2"),
+    (None, None), ("", ""),
+])
+def test_normalize_provider_model(raw, expected):
+    assert _normalize_cline_model(raw) == expected
 
 
 # ── pricing.calculate_cost ────────────────────────────────────────────────
@@ -105,50 +93,21 @@ class TestPricing:
 
 # ── short_model display ───────────────────────────────────────────────────
 
-class TestShortModel:
-    def test_claude_opus(self):
-        assert short_model("claude-opus-4-7") == "opus-4.7"
-
-    def test_gpt5_5(self):
-        assert short_model("gpt-5-5") == "gpt-5.5"
-
-    def test_gpt5_nano(self):
-        assert short_model("gpt-5-nano") == "gpt-5-nano"
-
-    def test_gpt5_mini(self):
-        assert short_model("gpt-5-mini") == "gpt-5-mini"
-
-    def test_nova(self):
-        # nova-pro-v1 — family "nova" with trailing qualifier stripped to family name
-        assert short_model("nova-pro-v1").startswith("nova")
-
-    def test_none(self):
-        assert short_model(None) in ("unknown", "?", "—", "")
-
-    # ── Context-window qualifiers ──
-    # Long-context variants must render distinctly so the OPS panel and
-    # call log don't conflate billing buckets that may differ in price.
-
-    def test_opus_1m_colon(self):
-        # Bedrock 1M-context Opus uses a ``:`` separator
-        assert short_model("claude-opus-4-7:1m") == "opus-4.7-1M"
-
-    def test_opus_1m_dash(self):
-        assert short_model("claude-opus-4-7-1m") == "opus-4.7-1M"
-
-    def test_opus_v_qualifier_no_context(self):
-        # ``-v1`` is a stable-release qualifier, not a context window
-        assert short_model("claude-opus-4-7-v1") == "opus-4.7"
-
-    def test_gpt5_200k(self):
-        assert short_model("gpt-5:200k") == "gpt-5-200K"
-
-    def test_gpt5_mini_200k(self):
-        assert short_model("gpt-5-mini:200k") == "gpt-5-mini-200K"
-
-    def test_sonnet_dated_no_context(self):
-        # Date stamp must not look like a context tag
-        assert short_model("claude-sonnet-4-5-20250929") == "sonnet-4.5"
+@pytest.mark.parametrize("raw, expected", [
+    ("claude-opus-4-6", "opus-4.6"), ("claude-opus-4-7", "opus-4.7"),
+    ("claude-sonnet-4-5-20250929", "sonnet-4.5"),
+    ("claude-haiku-4-5-20251001", "haiku-4.5"),
+    ("gpt-5-5", "gpt-5.5"), ("gpt-5-nano", "gpt-5-nano"),
+    ("gpt-5-mini", "gpt-5-mini"), ("nova-pro-v1", "nova"),
+    # Context qualifiers must remain distinct; date/release suffixes must not.
+    ("claude-opus-4-7:1m", "opus-4.7-1M"),
+    ("claude-opus-4-7-1m", "opus-4.7-1M"),
+    ("claude-opus-4-7-v1", "opus-4.7"),
+    ("gpt-5:200k", "gpt-5-200K"), ("gpt-5-mini:200k", "gpt-5-mini-200K"),
+    (None, "—"), ("", "—"), ("xyz-42", "xyz"),
+])
+def test_short_model(raw, expected):
+    assert short_model(raw) == expected
 
 
 # ── model_color ───────────────────────────────────────────────────────────

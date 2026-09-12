@@ -1,4 +1,4 @@
-"""Textual widgets used by the lcost OPS dashboard.
+"""Textual widgets used by the lcost dashboard.
 
 These are generic, stateless presentation components. They know how to render
 themselves given data; they do not know about the ledger, aggregation, or the
@@ -7,6 +7,9 @@ app shell.
 
 import math
 from typing import Callable, Dict, List, Optional
+
+from rich.markup import escape
+from rich.text import Text
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -25,23 +28,20 @@ from .formatters import (
     FIELD_TOKENS_IN,
     FIELD_TOKENS_OUT,
     format_cost,
+    format_number,
 )
 
 
 # ── Fluid-width bars ──────────────────────────────────────────────────────
 
 class _FluidBarBase(Static):
-    """Base for bars that redraw when their container width changes."""
+    """Draw against the current layout, including after a board rebuild."""
 
     def _draw(self, width: int) -> str:
         raise NotImplementedError
 
-    def on_resize(self, event) -> None:
-        self.update(self._draw(event.size.width))
-
-    def on_mount(self) -> None:
-        if self.size.width > 0:
-            self.update(self._draw(self.size.width))
+    def render(self) -> Text:
+        return Text.from_markup(self._draw(self.size.width))
 
 
 class FluidBar(_FluidBarBase):
@@ -369,7 +369,7 @@ class HelpScreen(ModalScreen):
         "BOARD": (
             "BOARD",
             "  [b]1–4    [/b] Expand a panel fullscreen\n"
-            "  [b]m      [/b] Switch board price / tokens\n"
+            "  [b]m      [/b] Switch all board price / total tokens\n"
             "  [b]h      [/b] Cycle hourly bar (cost / tokens / requests)\n"
             "  [b]j / k  [/b] Move call-log selection · [b]enter[/b] detail",
         ),
@@ -447,22 +447,23 @@ class EntryDetailScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         e = self._entry
-        preview = e.get("promptPreview") or "—"
+        preview = escape(str(e.get("promptPreview") or "—"))
+        safe = lambda value: escape(str(value))
         lines = [
-            f"[b]{self._entry_id}[/b]",
+            f"[b]{safe(self._entry_id)}[/b]",
             "",
             f"Time:     {self._dt.strftime('%Y-%m-%d %H:%M:%S')}",
-            f"Source:   {e.get('source', '?')}",
-            f"Model:    {e.get('model') or '—'}",
-            f"Project:  {e.get('project') or '—'}",
-            f"Session:  {e.get('session') or '—'}",
+            f"Source:   {safe(e.get('source', '?'))}",
+            f"Model:    {safe(e.get('model') or '—')}",
+            f"Project:  {safe(e.get('project') or '—')}",
+            f"Session:  {safe(e.get('session') or '—')}",
             f"Subagent: {'yes' if e.get('isSubagent') else 'no'}",
-            f"Stop:     {e.get('stopReason') or '—'}",
+            f"Stop:     {safe(e.get('stopReason') or '—')}",
             "",
-            f"Tokens:   in={e.get(FIELD_TOKENS_IN) or 0:,}  "
-            f"out={e.get(FIELD_TOKENS_OUT) or 0:,}  "
-            f"cache_w={e.get(FIELD_CACHE_WRITES) or 0:,}  "
-            f"cache_r={e.get(FIELD_CACHE_READS) or 0:,}",
+            f"Tokens:   in={format_number(e.get(FIELD_TOKENS_IN))}  "
+            f"out={format_number(e.get(FIELD_TOKENS_OUT))}  "
+            f"cache_w={format_number(e.get(FIELD_CACHE_WRITES))}  "
+            f"cache_r={format_number(e.get(FIELD_CACHE_READS))}",
             f"Cost:     {format_cost(e.get(FIELD_COST))}  "
             f"(saved {format_cost(e.get(FIELD_CACHE_SAVINGS))})",
             "",
@@ -477,25 +478,17 @@ class EntryDetailScreen(ModalScreen):
         )
 
 
-# ── Bindable widgets ──────────────────────────────────────────────────────
-#
-# These subscribe to a `LiveMetrics` carrier and rewrite their content when
-# the current `MetricsSnapshot` changes. They eliminate the OpsRefs registry
-# and the `_apply_stat_labels` / `_update_ops_in_place` pair by making every
-# live value a self-updating widget.
+# ── Snapshot-bound widgets ────────────────────────────────────────────────
 
-class LiveLabel(Label):
-    """Label bound to a `MetricsSnapshot` field via a selector.
+class _SnapshotBinding:
+    """Share subscription and value selection across display widgets.
 
-    Parameters:
-      live: The `LiveMetrics` carrier to subscribe to.
-      selector: `(snapshot) -> str`. Returns the full rendered markup.
-      placeholder: Shown before the first snapshot arrives.
+    Each widget applies the selected value through `_apply_snapshot`.
+    A failed selector leaves its previous display intact.
     """
 
-    def __init__(self, live, selector: Callable, placeholder: str = "",
-                 markup: bool = True, **kwargs):
-        super().__init__(placeholder, markup=markup, **kwargs)
+    def __init__(self, live, selector: Callable, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self._live = live
         self._selector = selector
 
@@ -506,103 +499,61 @@ class LiveLabel(Label):
         if snap is None:
             return
         try:
-            text = self._selector(snap)
+            value = self._selector(snap)
         except Exception:
             return
-        self.update(text)
+        self._apply_snapshot(value)
+
+    def _apply_snapshot(self, value) -> None:
+        self.update(value)
 
 
-class LiveStatic(Static):
-    """Static bound to a `MetricsSnapshot` field. Same API as `LiveLabel`."""
+class LiveLabel(_SnapshotBinding, Label):
+    """Label whose selector returns markup from the current snapshot."""
 
     def __init__(self, live, selector: Callable, placeholder: str = "",
                  markup: bool = True, **kwargs):
-        super().__init__(placeholder, markup=markup, **kwargs)
-        self._live = live
-        self._selector = selector
-
-    def on_mount(self) -> None:
-        self.watch(self._live, "snapshot", self._on_snapshot, init=True)
-
-    def _on_snapshot(self, snap) -> None:
-        if snap is None:
-            return
-        try:
-            text = self._selector(snap)
-        except Exception:
-            return
-        self.update(text)
+        super().__init__(live, selector, placeholder, markup=markup, **kwargs)
 
 
-class LiveBorderSubtitle(Static):
-    """Zero-height helper: updates its parent panel's border_subtitle.
+class LiveStatic(_SnapshotBinding, Static):
+    """Static display with the same snapshot and placeholder API as LiveLabel."""
 
-    Trick: watchers run on any Widget. We use a 0-content Static mounted
-    inside the panel that owns the border. Avoids restructuring panel
-    builders just to bind border text.
-    """
+    def __init__(self, live, selector: Callable, placeholder: str = "",
+                 markup: bool = True, **kwargs):
+        super().__init__(live, selector, placeholder, markup=markup, **kwargs)
+
+
+class LiveBorderSubtitle(_SnapshotBinding, Static):
+    """Hidden widget that binds a panel's border subtitle to the snapshot."""
 
     DEFAULT_CSS = "LiveBorderSubtitle { display: none; }"
 
     def __init__(self, live, selector: Callable, parent_widget: Widget,
                  **kwargs):
-        super().__init__("", **kwargs)
-        self._live = live
-        self._selector = selector
+        super().__init__(live, selector, "", **kwargs)
         self._parent_widget = parent_widget
 
-    def on_mount(self) -> None:
-        self.watch(self._live, "snapshot", self._on_snapshot, init=True)
-
-    def _on_snapshot(self, snap) -> None:
-        if snap is None:
-            return
-        try:
-            text = self._selector(snap)
-        except Exception:
-            return
-        self._parent_widget.border_subtitle = text
+    def _apply_snapshot(self, value) -> None:
+        self._parent_widget.border_subtitle = value
 
 
-class LiveHourlyBar(HourlyBar):
-    """HourlyBar that re-reads its 24 values from the snapshot."""
+class LiveHourlyBar(_SnapshotBinding, HourlyBar):
+    """HourlyBar whose selector returns 24 values from the snapshot."""
 
     def __init__(self, live, selector: Callable, **kwargs):
-        super().__init__([0.0] * 24, **kwargs)
-        self._live = live
-        self._selector = selector
+        super().__init__(live, selector, [0.0] * 24, **kwargs)
 
-    def on_mount(self) -> None:
-        self.watch(self._live, "snapshot", self._on_snapshot, init=True)
-
-    def _on_snapshot(self, snap) -> None:
-        if snap is None:
-            return
-        try:
-            values = self._selector(snap)
-        except Exception:
-            return
-        self.update_values(values)
+    def _apply_snapshot(self, value) -> None:
+        self.update_values(value)
 
 
-class LiveSparkline(Sparkline):
-    """Sparkline bound to a list-valued snapshot selector."""
+class LiveSparkline(_SnapshotBinding, Sparkline):
+    """Sparkline whose selector returns a series, including idle periods."""
 
     def __init__(self, live, selector: Callable, summary_function=max,
                  **kwargs):
-        super().__init__([0.0], summary_function=summary_function, **kwargs)
-        self._live = live
-        self._selector = selector
+        super().__init__(live, selector, [0.0], summary_function=summary_function, **kwargs)
 
-    def on_mount(self) -> None:
-        self.watch(self._live, "snapshot", self._on_snapshot, init=True)
-
-    def _on_snapshot(self, snap) -> None:
-        if snap is None:
-            return
-        try:
-            values = self._selector(snap)
-        except Exception:
-            return
-        if values and any(v > 0 for v in values):
-            self.data = values
+    def _apply_snapshot(self, value) -> None:
+        self.data = value or [0.0]

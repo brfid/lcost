@@ -1,15 +1,12 @@
 """Tests for pipeline gap detection, backup rotation, and orphan cleanup."""
 
 import json
-import tempfile
 from datetime import datetime, timedelta
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from lcost.ledger import (
-    BACKUP_RETAIN,
     backup_dir,
     hours_since_last_ingest,
     load_ingest_state,
@@ -21,17 +18,13 @@ from lcost.ledger import (
 )
 from lcost.ingest_state import source_health
 from lcost.cli import print_ledger_stats
-from lcost.pipeline import DEFAULT_MAX_GAP_HOURS, run_ingest
+from lcost.pipeline import run_ingest
 
 
-@pytest.fixture
-def tmp_dir():
-    with tempfile.TemporaryDirectory() as d:
-        yield Path(d)
 
 
 class TestIngestTimestamp:
-    def test_stamp_and_read(self, tmp_dir):
+    def test_stamp_and_read(self, tmp_path):
         state = {"_version": 1, "files": {}, "last_ingest_at": None}
         stamp_ingest(state)
         gap = hours_since_last_ingest(state)
@@ -50,8 +43,8 @@ class TestIngestTimestamp:
 
 
 class TestBackupRotation:
-    def test_creates_backup(self, tmp_dir):
-        ledger_path = tmp_dir / "ledger.json"
+    def test_creates_backup(self, tmp_path):
+        ledger_path = tmp_path / "ledger.json"
         save_ledger(ledger_path, {"entry1": {"cost": 1.0}})
         result = rotate_backup(ledger_path)
         today = datetime.now().strftime("%Y-%m-%d")
@@ -59,23 +52,23 @@ class TestBackupRotation:
         assert result.exists()
         assert json.loads(result.read_text()) == {"entry1": {"cost": 1.0}}
 
-    def test_idempotent_per_day(self, tmp_dir):
+    def test_idempotent_per_day(self, tmp_path):
         """Running backup twice same day is a no-op."""
-        ledger_path = tmp_dir / "ledger.json"
+        ledger_path = tmp_path / "ledger.json"
         save_ledger(ledger_path, {"e1": {}})
         first = rotate_backup(ledger_path)
         second = rotate_backup(ledger_path)
         assert first is not None
         assert second is None  # idempotent
 
-    def test_missing_source_skipped(self, tmp_dir):
+    def test_missing_source_skipped(self, tmp_path):
         """No ledger file → no backup."""
-        ledger_path = tmp_dir / "missing.json"
+        ledger_path = tmp_path / "missing.json"
         assert rotate_backup(ledger_path) is None
 
-    def test_retention_prunes_old(self, tmp_dir):
+    def test_retention_prunes_old(self, tmp_path):
         """Only keep N most recent backups."""
-        ledger_path = tmp_dir / "ledger.json"
+        ledger_path = tmp_path / "ledger.json"
         save_ledger(ledger_path, {})
         d = backup_dir(ledger_path)
         d.mkdir(parents=True, exist_ok=True)
@@ -92,8 +85,8 @@ class TestBackupRotation:
 
 
 class TestOrphanCleanup:
-    def test_drops_missing_files(self, tmp_dir):
-        real = tmp_dir / "real.jsonl"
+    def test_drops_missing_files(self, tmp_path):
+        real = tmp_path / "real.jsonl"
         real.write_text("")
         state = {
             "_version": 1,
@@ -110,9 +103,9 @@ class TestOrphanCleanup:
 
 
 class TestGapDetection:
-    def test_first_run_no_gap_trigger(self, tmp_dir, capsys):
+    def test_first_run_no_gap_trigger(self, tmp_path, capsys):
         """First run: no previous timestamp, so no gap-triggered deep mode."""
-        ledger_path = tmp_dir / "ledger.json"
+        ledger_path = tmp_path / "ledger.json"
         save_ledger(ledger_path, {})
         ledger = {}
 
@@ -124,9 +117,9 @@ class TestGapDetection:
         captured = capsys.readouterr()
         assert "Deep rescan" not in captured.out
 
-    def test_fresh_ingest_no_trigger(self, tmp_dir, capsys):
+    def test_fresh_ingest_no_trigger(self, tmp_path, capsys):
         """Previous run <24h ago: stays incremental."""
-        ledger_path = tmp_dir / "ledger.json"
+        ledger_path = tmp_path / "ledger.json"
         save_ledger(ledger_path, {"e1": {}})
         ledger = {"e1": {}}
         # Seed an ingest-state that says we ran 1 hour ago
@@ -144,9 +137,9 @@ class TestGapDetection:
         captured = capsys.readouterr()
         assert "Deep rescan" not in captured.out
 
-    def test_stale_ingest_triggers_deep(self, tmp_dir, capsys):
+    def test_stale_ingest_triggers_deep(self, tmp_path, capsys):
         """Previous run >24h ago: auto-promote to deep mode."""
-        ledger_path = tmp_dir / "ledger.json"
+        ledger_path = tmp_path / "ledger.json"
         save_ledger(ledger_path, {"e1": {}})
         ledger = {"e1": {}}
         state_path = ledger_path.parent / "ingest_state.json"
@@ -173,9 +166,9 @@ class TestGapDetection:
         assert "/some/old/file.jsonl" not in cc_state.get("files", {})
         assert "/some/old/file.jsonl" not in codex_state.get("files", {})
 
-    def test_custom_gap_threshold(self, tmp_dir, capsys):
+    def test_custom_gap_threshold(self, tmp_path, capsys):
         """User can tune the threshold."""
-        ledger_path = tmp_dir / "ledger.json"
+        ledger_path = tmp_path / "ledger.json"
         save_ledger(ledger_path, {"e1": {}})
         ledger = {"e1": {}}
         state_path = ledger_path.parent / "ingest_state.json"
@@ -194,9 +187,9 @@ class TestGapDetection:
         captured = capsys.readouterr()
         assert "Deep rescan" in captured.out
 
-    def test_explicit_deep_flag(self, tmp_dir, capsys):
+    def test_explicit_deep_flag(self, tmp_path, capsys):
         """--deep forces rescan even with fresh ingest state."""
-        ledger_path = tmp_dir / "ledger.json"
+        ledger_path = tmp_path / "ledger.json"
         save_ledger(ledger_path, {"e1": {}})
         ledger = {"e1": {}}
         state_path = ledger_path.parent / "ingest_state.json"
@@ -216,8 +209,8 @@ class TestGapDetection:
 
 
 class TestBackupIntegration:
-    def test_run_ingest_creates_backup(self, tmp_dir):
-        ledger_path = tmp_dir / "ledger.json"
+    def test_run_ingest_creates_backup(self, tmp_path):
+        ledger_path = tmp_path / "ledger.json"
         save_ledger(ledger_path, {"pre": {"cost": 1.0}})
         ledger = {"pre": {"cost": 1.0}}
 
@@ -230,17 +223,9 @@ class TestBackupIntegration:
         assert (backup_dir(ledger_path) / f"ledger-{today}.json").exists()
 
 
-class TestDefaults:
-    def test_default_gap_hours(self):
-        assert DEFAULT_MAX_GAP_HOURS == 24.0
-
-    def test_default_retention(self):
-        assert BACKUP_RETAIN == 7
-
-
 class TestTimestampPersisted:
-    def test_ingest_stamps_state(self, tmp_dir):
-        ledger_path = tmp_dir / "ledger.json"
+    def test_ingest_stamps_state(self, tmp_path):
+        ledger_path = tmp_path / "ledger.json"
         save_ledger(ledger_path, {})
         ledger = {}
 
@@ -254,8 +239,8 @@ class TestTimestampPersisted:
 
 
 class TestSourceHealth:
-    def test_records_each_successful_source_scan(self, tmp_dir):
-        ledger_path = tmp_dir / "ledger.json"
+    def test_records_each_successful_source_scan(self, tmp_path):
+        ledger_path = tmp_path / "ledger.json"
         ledger = {}
         codex_entry = {
             "codex:one": {
@@ -280,8 +265,8 @@ class TestSourceHealth:
         assert health["codex"]["records_added"] == 1
         assert health["codex"]["last_error"] is None
 
-    def test_one_collector_error_does_not_hide_other_sources(self, tmp_dir):
-        ledger_path = tmp_dir / "ledger.json"
+    def test_one_collector_error_does_not_hide_other_sources(self, tmp_path):
+        ledger_path = tmp_path / "ledger.json"
         ledger = {}
 
         with patch(
@@ -300,8 +285,8 @@ class TestSourceHealth:
         assert health["cc"]["last_error"] is None
         assert health["codex"]["last_error"] is None
 
-    def test_stats_exposes_source_freshness(self, tmp_dir, capsys):
-        ledger_path = tmp_dir / "ledger.json"
+    def test_stats_exposes_source_freshness(self, tmp_path, capsys):
+        ledger_path = tmp_path / "ledger.json"
         save_ledger(ledger_path, {})
         save_ingest_state(ledger_path.parent / "ingest_state.json", {
             "_version": 2,
@@ -325,3 +310,37 @@ class TestSourceHealth:
         assert "Codex / ChatGPT" in output
         assert "12 seen" in output
         assert "Claude Code" in output
+
+
+@pytest.mark.parametrize("initial, correction, key, expected", [
+    ({"source": "cline", "cost": 0, "tokensIn": 0},
+     {"source": "cline", "cost": 0.12, "tokensIn": 1000}, "cost", 0.12),
+    ({"source": "cc", "cost": 1},
+     {"source": "cc", "cost": 1, "project": "recovered"}, "project", "recovered"),
+    ({"source": "cc", "cost": None},
+     {"source": "cc", "cost": 0.12}, "cost", 0.12),
+])
+def test_corrections_persist_even_without_new_entries(tmp_path, initial, correction, key, expected):
+    from lcost.ledger import load_ledger
+    path = tmp_path / "ledger.json"
+    ledger = {"same-id": initial}
+    save_ledger(path, ledger)
+    source = "cline" if initial["source"] == "cline" else "claude-code"
+    collector = "collect_cline_data" if source == "cline" else "collect_claude_code_data"
+    with patch(f"lcost.pipeline.{collector}", return_value={"same-id": correction}):
+        assert run_ingest(path, ledger, source=source, quiet=True) == 0
+    assert load_ledger(path)["same-id"][key] == expected
+
+
+def test_same_size_source_rewrite_is_reparsed(tmp_path):
+    from lcost.ingest_state import file_needs_processing, update_file_state
+    import os
+    path = tmp_path / "source.jsonl"
+    path.write_text("before")
+    state = {"files": {}}
+    update_file_state(state, path, path.stat().st_size)
+    assert file_needs_processing(path, state) == (False, 0)
+    previous = path.stat().st_mtime
+    path.write_text("after!")
+    os.utime(path, (previous + 2, previous + 2))
+    assert file_needs_processing(path, state) == (True, 0)

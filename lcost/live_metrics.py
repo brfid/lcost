@@ -1,19 +1,4 @@
-"""Reactive metrics layer for the TUI.
-
-One `LiveMetrics` instance holds a `MetricsSnapshot` that every display
-widget reads from. The 30s refresh tick recomputes the snapshot; Textual's
-reactive system fans the change out to subscribed widgets in place.
-
-Design notes:
-  - Snapshot is frozen and replaced atomically. Widgets never see a half-
-    written snapshot.
-  - `clock` is part of the snapshot so time-derived values (today, this
-    week, rate/hr) become stale-proof: a minute rollover is a refresh
-    trigger on equal footing with a new ledger entry.
-  - `daily_signature` isolates chart-worthy changes from clock ticks, so
-    expensive plotext rebuilds fire only when the underlying day data
-    changes.
-"""
+"""Calendar-based price and token summaries shared by live dashboard widgets."""
 
 from __future__ import annotations
 
@@ -24,40 +9,21 @@ from typing import Dict, List, Optional, Tuple
 from textual.reactive import reactive
 from textual.widget import Widget
 
+from .aggregation import calendar_days
 from .formatters import (
-    FIELD_CACHE_SAVINGS,
-    FIELD_COST,
-    FIELD_REQUESTS,
-    FIELD_TOKENS_IN,
-    FIELD_TOKENS_OUT,
-    SOURCES,
-    calculate_totals,
-    init_field_dict,
+    FIELD_CACHE_READS, FIELD_CACHE_SAVINGS, FIELD_CACHE_WRITES, FIELD_COST,
+    FIELD_REQUESTS, FIELD_TOKENS_IN, FIELD_TOKENS_OUT, SOURCES,
+    calculate_totals, total_tokens,
 )
 from .ops_data import (
-    OpsView,
-    aggregate_today,
-    collect_entries,
-    derive_ops_view,
-    source_today,
-    SourceToday,
-    short_model,
-    short_project,
+    OpsView, SourceToday, aggregate_today, collect_entries, derive_ops_view,
+    short_model, short_project, source_today,
 )
 
-
-
-
-# ── Clock bucket ──────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
 class ClockBucket:
-    """Quantized clock reading.
-
-    `minute_key` flips every minute — finest granularity used for "rate/hr"
-    and "today cost" refreshes. `hour_key` and `day` allow coarser gating
-    if a widget only needs hour-level freshness.
-    """
+    """One clock reading for every reduction in a refresh."""
     now: datetime
     minute_key: str
     hour_key: str
@@ -66,212 +32,137 @@ class ClockBucket:
     @classmethod
     def capture(cls, now: Optional[datetime] = None) -> "ClockBucket":
         now = now or datetime.now()
-        return cls(
-            now=now,
-            minute_key=now.strftime("%Y-%m-%dT%H:%M"),
-            hour_key=now.strftime("%Y-%m-%dT%H"),
-            day=now.strftime("%Y-%m-%d"),
-        )
+        return cls(now, now.strftime("%Y-%m-%dT%H:%M"),
+                   now.strftime("%Y-%m-%dT%H"), now.strftime("%Y-%m-%d"))
 
-
-# ── Overview-tab derived metrics ──────────────────────────────────────────
 
 @dataclass(frozen=True)
-class OverviewMetrics:
-    """Everything the OVERVIEW tab displays, pre-computed."""
-    today_cost: float
-    today_requests: int
-    this_week_cost: float
-    wow_detail: str
-    month_cost: float
-    month_requests: int
-    tokens_7d_total: int
-    tokens_7d_in: int
-    tokens_7d_out: int
-    cost_per_1k_out_7d: float   # $/1K output tokens over last 7 days
-    cache_savings_30d: float
-    cache_eff_label: str
+class PeriodMetrics:
+    """The same periods and sparklines for either dollars or tokens."""
+    today: float
+    week: float
+    month: float
+    week_change: str
     burn_rate: float
-    spark_7d_cost: List[float]
+    spark_7d: List[float]
     spark_4w: List[float]
-    spark_30d_cost: List[float]
-    spark_7d_tokens: List[float]
-    spark_7d_cache: List[float]
+    spark_30d: List[float]
     spark_burn: List[float]
 
 
-def _overview(daily: Dict[str, Dict], clock: ClockBucket) -> OverviewMetrics:
-    sorted_days = sorted(daily.keys())
-    today_str = clock.day
-    today = clock.now
-    today_data = daily.get(today_str, init_field_dict())
-
-    last_7 = sorted_days[-7:] if len(sorted_days) >= 7 else sorted_days
-    last_28 = sorted_days[-28:] if len(sorted_days) >= 28 else sorted_days
-    last_30 = sorted_days[-30:] if len(sorted_days) >= 30 else sorted_days
-    totals_30 = calculate_totals({d: daily[d] for d in last_30})
-
-    spark_7d_cost = [daily[d][FIELD_COST] for d in last_7]
-
-    week_costs: List[float] = []
-    for i in range(0, len(last_28), 7):
-        chunk = last_28[i:i + 7]
-        week_costs.append(sum(daily[d][FIELD_COST] for d in chunk))
-    spark_4w = week_costs if week_costs else [0.0]
-
-    tokens_in_7d = sum(daily[d][FIELD_TOKENS_IN] for d in last_7)
-    tokens_out_7d = sum(daily[d][FIELD_TOKENS_OUT] for d in last_7)
-    spark_7d_tokens = [
-        daily[d][FIELD_TOKENS_IN] + daily[d][FIELD_TOKENS_OUT]
-        for d in last_7
-    ]
-
-    spark_7d_cache: List[float] = []
-    for d in last_7:
-        dd = daily[d]
-        potential = dd[FIELD_COST] + dd[FIELD_CACHE_SAVINGS]
-        spark_7d_cache.append(
-            dd[FIELD_CACHE_SAVINGS] / potential * 100 if potential > 0 else 0
-        )
-
-    spark_30d_cost = [daily[d][FIELD_COST] for d in last_30]
-
-    spark_burn: List[float] = []
-    for i in range(len(last_30)):
-        window = last_30[max(0, i - 6):i + 1]
-        avg = sum(daily[d][FIELD_COST] for d in window) / len(window)
-        spark_burn.append(avg)
-
-    this_week_start = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
-    last_week_start = (today - timedelta(days=today.weekday() + 7)).strftime("%Y-%m-%d")
-    this_week_cost = sum(
-        d[FIELD_COST] for day, d in daily.items()
-        if this_week_start <= day <= today_str
-    )
-    last_week_cost = sum(
-        d[FIELD_COST] for day, d in daily.items()
-        if last_week_start <= day < this_week_start
-    )
-    if last_week_cost > 0:
-        wow_delta = ((this_week_cost - last_week_cost) / last_week_cost) * 100
-        wow_detail = f"{'↑' if wow_delta >= 0 else '↓'} {abs(wow_delta):.0f}% vs last week"
+def _periods(values: Dict, clock: ClockBucket) -> PeriodMetrics:
+    days = calendar_days(clock.now, 36)
+    series = [values.get(day, 0) for day in days]
+    monday = clock.now - timedelta(days=clock.now.weekday())
+    weeks = []
+    for weeks_ago in (3, 2, 1, 0):
+        start = monday - timedelta(days=7 * weeks_ago)
+        length = 7 if weeks_ago else clock.now.weekday() + 1
+        weeks.append(sum(values.get((start + timedelta(days=i)).strftime("%Y-%m-%d"), 0)
+                         for i in range(length)))
+    # Compare like-for-like portions of this week and the preceding week.
+    previous = sum(values.get(day, 0) for day in calendar_days(
+        clock.now - timedelta(days=7), clock.now.weekday() + 1,
+    ))
+    if previous:
+        delta = (weeks[-1] / previous - 1) * 100
+        change = f"{'↑' if delta >= 0 else '↓'} {abs(delta):.0f}% vs prior WTD"
     else:
-        wow_detail = "no prior week data"
-
-    potential_30 = totals_30[FIELD_COST] + totals_30[FIELD_CACHE_SAVINGS]
-    cache_eff_label = (
-        f"{totals_30[FIELD_CACHE_SAVINGS] / potential_30 * 100:.0f}% efficiency"
-        if potential_30 > 0 else ""
+        change = "no prior WTD activity"
+    return PeriodMetrics(
+        today=series[-1], week=weeks[-1], month=sum(series[-30:]),
+        week_change=change, burn_rate=sum(series[-7:]) / 7,
+        spark_7d=series[-7:], spark_4w=weeks, spark_30d=series[-30:],
+        spark_burn=[sum(series[i - 6:i + 1]) / 7 for i in range(6, 36)],
     )
-    burn_rate = sum(spark_7d_cost) / len(last_7) if last_7 else 0
 
-    cost_7d = sum(spark_7d_cost)
-    cost_per_1k_out_7d = (cost_7d / tokens_out_7d * 1000) if tokens_out_7d > 0 else 0.0
 
+@dataclass(frozen=True)
+class OverviewMetrics:
+    cost: PeriodMetrics
+    tokens: PeriodMetrics
+    today_requests: int
+    month_requests: int
+    tokens_7d_in: int
+    tokens_7d_out: int
+    tokens_7d_cache: int
+    cache_savings_30d: float
+    cache_reads_30d: int
+    cache_eff_label: str
+    cache_hit_label: str
+    spark_7d_cache: List[float]
+    spark_7d_cache_hits: List[float]
+
+
+def _overview(daily: Dict[str, Dict], clock: ClockBucket) -> OverviewMetrics:
+    days = calendar_days(clock.now, 30)
+    totals = calculate_totals({day: daily.get(day, {}) for day in days})
+    week = calculate_totals({day: daily.get(day, {}) for day in days[-7:]})
+    potential = totals[FIELD_COST] + totals[FIELD_CACHE_SAVINGS]
+    input_total = (totals[FIELD_TOKENS_IN] + totals[FIELD_CACHE_READS]
+                   + totals[FIELD_CACHE_WRITES])
+    cache_sparks = []
+    hit_sparks = []
+    for day in days[-7:]:
+        d = daily.get(day, {})
+        savings = d.get(FIELD_CACHE_SAVINGS, 0)
+        potential_day = d.get(FIELD_COST, 0) + savings
+        reads = d.get(FIELD_CACHE_READS, 0)
+        inputs = d.get(FIELD_TOKENS_IN, 0) + d.get(FIELD_CACHE_WRITES, 0) + reads
+        cache_sparks.append(savings / potential_day * 100 if potential_day else 0)
+        hit_sparks.append(reads / inputs * 100 if inputs else 0)
     return OverviewMetrics(
-        today_cost=today_data[FIELD_COST],
-        today_requests=today_data[FIELD_REQUESTS],
-        this_week_cost=this_week_cost,
-        wow_detail=wow_detail,
-        month_cost=totals_30[FIELD_COST],
-        month_requests=totals_30[FIELD_REQUESTS],
-        tokens_7d_total=sum(spark_7d_tokens),
-        tokens_7d_in=tokens_in_7d,
-        tokens_7d_out=tokens_out_7d,
-        cost_per_1k_out_7d=cost_per_1k_out_7d,
-        cache_savings_30d=totals_30[FIELD_CACHE_SAVINGS],
-        cache_eff_label=cache_eff_label,
-        burn_rate=burn_rate,
-        spark_7d_cost=spark_7d_cost,
-        spark_4w=spark_4w,
-        spark_30d_cost=spark_30d_cost,
-        spark_7d_tokens=spark_7d_tokens,
-        spark_7d_cache=spark_7d_cache,
-        spark_burn=spark_burn,
+        cost=_periods({day: d[FIELD_COST] for day, d in daily.items()}, clock),
+        tokens=_periods({day: total_tokens(d) for day, d in daily.items()}, clock),
+        today_requests=daily.get(clock.day, {}).get(FIELD_REQUESTS, 0),
+        month_requests=totals[FIELD_REQUESTS],
+        tokens_7d_in=week[FIELD_TOKENS_IN], tokens_7d_out=week[FIELD_TOKENS_OUT],
+        tokens_7d_cache=week[FIELD_CACHE_READS] + week[FIELD_CACHE_WRITES],
+        cache_savings_30d=totals[FIELD_CACHE_SAVINGS],
+        cache_reads_30d=totals[FIELD_CACHE_READS],
+        cache_eff_label=(f"{totals[FIELD_CACHE_SAVINGS] / potential * 100:.0f}% saved"
+                         if potential else "—"),
+        cache_hit_label=(f"{totals[FIELD_CACHE_READS] / input_total * 100:.0f}% hits"
+                         if input_total else "—"),
+        spark_7d_cache=cache_sparks, spark_7d_cache_hits=hit_sparks,
     )
 
-
-# ── Snapshot ──────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
 class MetricsSnapshot:
-    """The full TUI-facing view. Replaced atomically on each refresh."""
+    """Replace the whole snapshot so widgets share one consistent refresh."""
     clock: ClockBucket
-    daily_signature: Tuple             # changes when `daily` changes
-    ledger_signature: Tuple            # (len, source_filter)
     overview: OverviewMetrics
     ops: OpsView
-    ops_entries: List                  # raw entries for OPS call-log rendering
+    ops_entries: List
     daily: Dict[str, Dict] = field(default_factory=dict)
     source_filter: Optional[str] = None
     source_today: Tuple[SourceToday, ...] = ()
     source_health: Dict[str, Dict] = field(default_factory=dict)
 
 
-def _daily_signature(daily: Dict[str, Dict]) -> Tuple:
-    """Fingerprint of the daily aggregate — cheap change detector for charts.
-
-    Length + newest-day cost/request totals catch both new-entry-today and
-    new-day-appeared changes without hashing the whole dict.
-    """
-    if not daily:
-        return (0,)
-    newest = max(daily.keys())
-    d = daily[newest]
-    return (
-        len(daily),
-        newest,
-        d.get(FIELD_COST, 0),
-        d.get(FIELD_REQUESTS, 0),
-        d.get(FIELD_TOKENS_IN, 0),
-        d.get(FIELD_TOKENS_OUT, 0),
-    )
-
-
 def compute_snapshot(ledger: Dict, daily: Dict[str, Dict],
                      source_filter: Optional[str],
                      clock: Optional[ClockBucket] = None,
-                     source_health: Optional[Dict[str, Dict]] = None,
-                     ) -> MetricsSnapshot:
-    """Build a full `MetricsSnapshot` from raw inputs. Pure function."""
+                     source_health: Optional[Dict[str, Dict]] = None) -> MetricsSnapshot:
     clock = clock or ClockBucket.capture()
     entries = collect_entries(ledger, source_filter)
-    stats = aggregate_today(entries, short_project, short_model)
-    ops = derive_ops_view(entries, stats, now=clock.now)
-    overview = _overview(daily, clock)
-    source_names = (
-        (source_filter,)
-        if source_filter
-        else tuple(source.short_name for source in SOURCES)
-    )
+    stats = aggregate_today(entries, short_project, short_model, now=clock.now)
+    source_names = ((source_filter,) if source_filter
+                    else tuple(source.short_name for source in SOURCES))
     return MetricsSnapshot(
-        clock=clock,
-        daily_signature=_daily_signature(daily),
-        ledger_signature=(len(ledger), source_filter or ""),
-        overview=overview,
-        ops=ops,
-        ops_entries=entries,
-        daily=daily,
-        source_filter=source_filter,
+        clock=clock, overview=_overview(daily, clock),
+        ops=derive_ops_view(entries, stats, now=clock.now), ops_entries=entries,
+        daily=daily, source_filter=source_filter,
         source_today=source_today(entries, source_names, now=clock.now),
         source_health=dict(source_health or {}),
     )
 
 
-# ── Reactive holder ───────────────────────────────────────────────────────
-
 class LiveMetrics(Widget):
-    """Non-visible reactive carrier for the current `MetricsSnapshot`.
-
-    Widgets that bind to specific fields watch this carrier. Making it a
-    Widget (rather than holding a free reactive) gives us Textual's normal
-    DOM-lifecycle watchers and `watch()` subscriptions.
-    """
-
+    """Invisible reactive carrier watched by mounted dashboard widgets."""
     DEFAULT_CSS = "LiveMetrics { display: none; }"
-
     snapshot: reactive[Optional[MetricsSnapshot]] = reactive(None, layout=False)
 
     def update(self, snap: MetricsSnapshot) -> None:
-        """Replace the current snapshot; fires watchers iff it differs."""
         self.snapshot = snap

@@ -6,11 +6,11 @@ trivially testable and reusable across tabs.
 """
 
 from collections import Counter, defaultdict
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 
-from .aggregation import entry_local_dt
+from .aggregation import iter_entries
 from .formatters import (
     FIELD_CACHE_READS,
     FIELD_CACHE_SAVINGS,
@@ -19,8 +19,9 @@ from .formatters import (
     FIELD_TOKENS_IN,
     FIELD_TOKENS_OUT,
     format_number,
+    total_tokens,
 )
-from .pricing import FAMILIES, FAMILIES_BY_KEY, family_for_model
+from .pricing import FAMILIES, family_for_model
 
 # Single source of truth: model family → color. Built from the pricing
 # registry so new families are picked up automatically.
@@ -56,15 +57,7 @@ class SourceToday:
 def collect_entries(ledger: Dict,
                     source_filter: Optional[str]) -> List[Tuple]:
     """Return [(dt, entry_id, entry), ...] sorted newest-first."""
-    out = []
-    for entry_id, entry in ledger.items():
-        if source_filter and entry.get("source") != source_filter:
-            continue
-        try:
-            dt = entry_local_dt(entry)
-        except (ValueError, KeyError):
-            continue
-        out.append((dt, entry_id, entry))
+    out = list(iter_entries(ledger, source_filter))
     out.sort(key=lambda x: x[0], reverse=True)
     return out
 
@@ -73,15 +66,10 @@ def iter_individual_entries(ledger: Dict,
                             source_filter: Optional[str] = None
                             ) -> Iterator[Tuple[datetime, Dict]]:
     """Yield displayable non-historical entries for heatmaps and charts."""
-    for entry_id, entry in ledger.items():
-        if entry_id.startswith("cline:historical:"):
+    for dt, entry_id, entry in iter_entries(ledger, source_filter):
+        if entry_id.startswith("cline:historical:") or entry.get("source") == "agent_spawn":
             continue
-        if source_filter and entry.get("source") != source_filter:
-            continue
-        try:
-            yield entry_local_dt(entry), entry
-        except (ValueError, KeyError):
-            continue
+        yield dt, entry
 
 
 def hour_week_grid(ledger: Dict, source_filter: Optional[str],
@@ -94,10 +82,7 @@ def hour_week_grid(ledger: Dict, source_filter: Optional[str],
         elif metric == "requests":
             value = 1.0
         else:
-            value = float(
-                (entry.get(FIELD_TOKENS_IN) or 0)
-                + (entry.get(FIELD_TOKENS_OUT) or 0)
-            )
+            value = float(total_tokens(entry))
         grid[dt.weekday()][dt.hour] += value
     return grid
 
@@ -117,10 +102,7 @@ def source_today(entries: Sequence[Tuple], source_names: Sequence[str],
             continue
         total = totals[source]
         total["requests"] += 1
-        total["tokens"] += (
-            (entry.get(FIELD_TOKENS_IN) or 0)
-            + (entry.get(FIELD_TOKENS_OUT) or 0)
-        )
+        total["tokens"] += total_tokens(entry)
         total["cost"] += entry.get(FIELD_COST) or 0
     return tuple(
         SourceToday(
@@ -133,9 +115,9 @@ def source_today(entries: Sequence[Tuple], source_names: Sequence[str],
     )
 
 
-def hourly_cost_today(entries: List[Tuple]) -> List[float]:
+def hourly_cost_today(entries: List[Tuple], now: Optional[datetime] = None) -> List[float]:
     """Return 24 floats: today's cost per hour at index 0..23."""
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = (now or datetime.now()).strftime("%Y-%m-%d")
     hours = [0.0] * 24
     for dt, _, e in entries:
         if dt.strftime("%Y-%m-%d") == today:
@@ -143,22 +125,19 @@ def hourly_cost_today(entries: List[Tuple]) -> List[float]:
     return hours
 
 
-def hourly_tokens_today(entries: List[Tuple]) -> List[float]:
-    """Return 24 floats: today's in+out tokens per hour at index 0..23."""
-    today = datetime.now().strftime("%Y-%m-%d")
+def hourly_tokens_today(entries: List[Tuple], now: Optional[datetime] = None) -> List[float]:
+    """Return 24 floats: today's total observed tokens per hour at index 0..23."""
+    today = (now or datetime.now()).strftime("%Y-%m-%d")
     hours = [0.0] * 24
     for dt, _, e in entries:
         if dt.strftime("%Y-%m-%d") == today:
-            hours[dt.hour] += (
-                (e.get(FIELD_TOKENS_IN) or 0)
-                + (e.get(FIELD_TOKENS_OUT) or 0)
-            )
+            hours[dt.hour] += total_tokens(e)
     return hours
 
 
-def hourly_requests_today(entries: List[Tuple]) -> List[float]:
+def hourly_requests_today(entries: List[Tuple], now: Optional[datetime] = None) -> List[float]:
     """Return 24 floats: today's call count per hour at index 0..23."""
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = (now or datetime.now()).strftime("%Y-%m-%d")
     hours = [0.0] * 24
     for dt, _, e in entries:
         if dt.strftime("%Y-%m-%d") == today and e.get("source") != "agent_spawn":
@@ -175,7 +154,7 @@ def percentile(sorted_values: List[float], pct: float) -> float:
 
 
 def aggregate_today(entries: List[Tuple], short_project_fn,
-                    short_model_fn) -> Dict:
+                    short_model_fn, now: Optional[datetime] = None) -> Dict:
     """One-pass aggregation of today's entries into a stats dict.
 
     short_project_fn / short_model_fn are injected so aggregation has no
@@ -185,12 +164,14 @@ def aggregate_today(entries: List[Tuple], short_project_fn,
     `subagent_type_counts` and skipped for cost/token aggregation so they
     don't inflate billable totals.
     """
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = (now or datetime.now()).strftime("%Y-%m-%d")
     s = {
         "count": 0, "cost": 0.0, "tokens_in": 0, "tokens_out": 0,
         "savings": 0.0, "costs": [],
         "subagent_count": 0, "subagent_cost": 0.0,
         "project_cost": defaultdict(float),
+        "project_tokens": defaultdict(int),
+        "tokens": 0,
         "model_counts": Counter(),
         "stop_counts": Counter(),
         "subagent_type_counts": Counter(),
@@ -215,7 +196,10 @@ def aggregate_today(entries: List[Tuple], short_project_fn,
         if e.get("isSubagent"):
             s["subagent_count"] += 1
             s["subagent_cost"] += cost
-        s["project_cost"][short_project_fn(e.get("project", ""))] += cost
+        project = short_project_fn(e.get("project") or "")
+        s["project_cost"][project] += cost
+        s["project_tokens"][project] += total_tokens(e)
+        s["tokens"] += total_tokens(e)
         s["model_counts"][short_model_fn(e.get("model"))] += 1
         s["stop_counts"][e.get("stopReason") or "—"] += 1
         if s["first_dt"] is None or dt < s["first_dt"]:
@@ -224,22 +208,19 @@ def aggregate_today(entries: List[Tuple], short_project_fn,
     return s
 
 
-def subagent_cost_rollup(entries: List[Tuple]) -> Dict[str, float]:
-    """Return {parent_session_uuid: total_subagent_cost} for today.
-
-    Used to attribute subagent-session cost back to the parent prompt.
-    """
-    today = datetime.now().strftime("%Y-%m-%d")
-    out: Dict[str, float] = defaultdict(float)
+def _subagent_rollup(entries: List[Tuple], value_fn,
+                     now: Optional[datetime] = None) -> Dict:
+    today = (now or datetime.now()).date()
+    out = defaultdict(float)
     for dt, _, e in entries:
-        if dt.strftime("%Y-%m-%d") != today:
-            continue
-        if not e.get("isSubagent"):
-            continue
-        parent = e.get("parentSession") or ""
-        if parent:
-            out[parent] += e.get(FIELD_COST) or 0
+        if dt.date() == today and e.get("isSubagent") and e.get("parentSession"):
+            out[e["parentSession"]] += value_fn(e)
     return dict(out)
+
+
+def subagent_cost_rollup(entries: List[Tuple], now: Optional[datetime] = None) -> Dict:
+    """Today's subagent costs by parent session."""
+    return _subagent_rollup(entries, lambda e: e.get(FIELD_COST) or 0, now)
 
 
 # ── Display-string helpers ────────────────────────────────────────────────
@@ -492,12 +473,15 @@ class RowSpec:
     is_subagent: bool
     spawn_cost: float
     max_log_cost: float
+    spawn_tokens: int = 0
+    max_log_tokens: int = 0
 
 
 LOG_ROW_CAP = 100
 
 
-def build_row_specs(entries: List[Tuple], max_log_cost: float) -> List[RowSpec]:
+def build_row_specs(entries: List[Tuple], max_log_cost: float = 0,
+                    now: Optional[datetime] = None) -> List[RowSpec]:
     """Compute per-row data specs once; reused for in-place selection updates.
 
     Each spec describes one renderable call-log row (agent_spawn entries are
@@ -507,7 +491,7 @@ def build_row_specs(entries: List[Tuple], max_log_cost: float) -> List[RowSpec]:
     prompt (by promptId), or — for entries that lack a promptId — if it's a
     session-head or end_turn row. Anchors get subagent cost rollups attached.
     """
-    visible = entries[:LOG_ROW_CAP]
+    visible = [row for row in entries if row[2].get("source") != "agent_spawn"][:LOG_ROW_CAP]
 
     seen_prompt_ids: set = set()
     seen_sessions_with_anchor: set = set()
@@ -518,7 +502,8 @@ def build_row_specs(entries: List[Tuple], max_log_cost: float) -> List[RowSpec]:
             if sess:
                 sessions_with_end_turn.add(sess)
 
-    sub_rollup = subagent_cost_rollup(entries)
+    sub_rollup = subagent_cost_rollup(entries, now)
+    token_rollup = _subagent_rollup(entries, total_tokens, now)
 
     specs: List[RowSpec] = []
     for dt, entry_id, e in visible:
@@ -558,8 +543,12 @@ def build_row_specs(entries: List[Tuple], max_log_cost: float) -> List[RowSpec]:
             is_subagent=bool(e.get("isSubagent")),
             spawn_cost=spawn_cost,
             max_log_cost=max_log_cost,
+            spawn_tokens=int(token_rollup.get(session, 0)) if is_anchor else 0,
         ))
-    return specs
+    max_cost = max((e.entry.get(FIELD_COST) or 0) + e.spawn_cost for e in specs) if specs else 0
+    max_tokens = max(total_tokens(e.entry) + e.spawn_tokens for e in specs) if specs else 0
+    return [replace(e, max_log_cost=max(max_log_cost, max_cost), max_log_tokens=max_tokens)
+            for e in specs]
 
 
 @dataclass(frozen=True)
@@ -572,13 +561,14 @@ class OpsView:
     stats: Dict                 # raw aggregate_today result
     today_cost: float
     rate_per_hr: float
+    tokens_per_hr: float
     cache_eff: float            # percentage (0..100)
     median_cost: float
     p95_cost: float
     max_call_cost: float
     median_tokens: int          # median tokens-per-call today
     hour_cost: List[float]      # 24 floats
-    hour_tokens: List[float]    # 24 floats — in+out tokens per hour
+    hour_tokens: List[float]    # 24 floats — total tokens per hour
     hour_requests: List[float]  # 24 floats — call count per hour
 
 
@@ -589,18 +579,18 @@ def derive_ops_view(entries: List[Tuple], stats: Dict,
     if stats["first_dt"]:
         elapsed_hrs = max((now - stats["first_dt"]).total_seconds() / 3600, 0.01)
         rate_per_hr = stats["cost"] / elapsed_hrs
+        tokens_per_hr = stats["tokens"] / elapsed_hrs
     else:
         rate_per_hr = 0.0
+        tokens_per_hr = 0.0
     potential = stats["cost"] + stats["savings"]
     cache_eff = (stats["savings"] / potential * 100) if potential > 0 else 0.0
     costs = stats["costs"]
 
-    # Median tokens-per-call: collect today's in+out per entry, sort, pick mid.
+    # Median tokens-per-call: collect today's total tokens per entry, sort, pick mid.
     today_str = now.strftime("%Y-%m-%d")
     tok_per_call = sorted(
-        (e.get(FIELD_TOKENS_IN) or 0)
-        + (e.get(FIELD_TOKENS_OUT) or 0)
-        for dt, _, e in entries
+        total_tokens(e) for dt, _, e in entries
         if dt.strftime("%Y-%m-%d") == today_str
         and e.get("source") != "agent_spawn"
     )
@@ -610,12 +600,13 @@ def derive_ops_view(entries: List[Tuple], stats: Dict,
         stats=stats,
         today_cost=stats["cost"],
         rate_per_hr=rate_per_hr,
+        tokens_per_hr=tokens_per_hr,
         cache_eff=cache_eff,
         median_cost=percentile(costs, 0.5),
         p95_cost=percentile(costs, 0.95),
         max_call_cost=costs[-1] if costs else 0.0,
         median_tokens=median_tokens,
-        hour_cost=hourly_cost_today(entries),
-        hour_tokens=hourly_tokens_today(entries),
-        hour_requests=hourly_requests_today(entries),
+        hour_cost=hourly_cost_today(entries, now),
+        hour_tokens=hourly_tokens_today(entries, now),
+        hour_requests=hourly_requests_today(entries, now),
     )

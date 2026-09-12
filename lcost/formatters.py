@@ -22,6 +22,17 @@ FIELD_COST = 'cost'
 FIELD_CACHE_SAVINGS = 'cacheSavings'
 FIELD_REQUESTS = 'requests'
 
+TOKEN_FIELDS = (FIELD_TOKENS_IN, FIELD_TOKENS_OUT, FIELD_CACHE_WRITES, FIELD_CACHE_READS)
+
+
+def total_tokens(entry: Dict) -> int:
+    """Sum observed token buckets; reasoning is already part of output.
+
+    Input excludes the separately recorded cache buckets. Missing buckets
+    contribute no observed usage; the detail view preserves their unknowns.
+    """
+    return sum(entry.get(field) or 0 for field in TOKEN_FIELDS)
+
 FIELD_NAMES = [
     FIELD_TOKENS_IN, FIELD_TOKENS_OUT, FIELD_CACHE_WRITES,
     FIELD_CACHE_READS, FIELD_COST, FIELD_CACHE_SAVINGS, FIELD_REQUESTS,
@@ -116,8 +127,10 @@ def init_field_dict() -> Dict:
     return {field: 0.0 if field in FLOAT_FIELDS else 0 for field in FIELD_NAMES}
 
 
-def format_number(num: int) -> str:
+def format_number(num: Optional[int]) -> str:
     """Format large numbers with K, M, B suffixes (whole numbers)."""
+    if num is None:
+        return "—"
     if num >= 1_000_000_000:
         return f"{round(num / 1_000_000_000)}B"
     if num >= 1_000_000:

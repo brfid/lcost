@@ -16,12 +16,42 @@ def entry_local_dt(entry: Dict) -> datetime:
     Claude Code entries are stored UTC-naive and converted here. Codex
     entries carry a UTC offset, while Cline entries are already local.
     """
-    dt = datetime.fromisoformat(entry['ts'])
-    if entry.get('source') in ('cc', 'agent_spawn'):
-        dt = dt.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
-    elif dt.tzinfo is not None:
+    timestamp = entry.get('ts')
+    if not isinstance(timestamp, str):
+        raise ValueError("Missing or invalid entry timestamp")
+    dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+    if dt.tzinfo is None and entry.get('source') in ('cc', 'agent_spawn'):
+        dt = dt.replace(tzinfo=timezone.utc)
+    if dt.tzinfo is not None:
         dt = dt.astimezone().replace(tzinfo=None)
     return dt
+
+
+def iter_entries(ledger: Dict, source_filter=None, date_from=None,
+                 date_to=None, project_filter=None):
+    """Yield valid (local datetime, id, entry) tuples within the filters."""
+    needle = project_filter.casefold() if project_filter else None
+    for entry_id, entry in ledger.items():
+        if not isinstance(entry, dict):
+            continue
+        if source_filter and entry.get('source') != source_filter:
+            continue
+        if needle and needle not in str(entry.get('project') or '').casefold():
+            continue
+        try:
+            dt = entry_local_dt(entry)
+        except (ValueError, OverflowError):
+            continue
+        day = dt.strftime('%Y-%m-%d')
+        if date_from and day < date_from or date_to and day > date_to:
+            continue
+        yield dt, entry_id, entry
+
+
+def calendar_days(now: datetime, days: int) -> list:
+    """Ascending calendar days ending today, including idle days."""
+    return [(now - timedelta(days=i)).strftime('%Y-%m-%d')
+            for i in range(days - 1, -1, -1)]
 
 
 def aggregate_by_day(ledger: Dict[str, Dict],
@@ -43,26 +73,12 @@ def aggregate_by_day(ledger: Dict[str, Dict],
       ``{day_key: totals_dict}`` with one entry per active day.
     """
     daily_data = defaultdict(init_field_dict)
-    proj_needle = project_filter.lower() if project_filter else None
-
-    for entry in ledger.values():
-        if source_filter and entry.get('source') != source_filter:
+    for dt, _, entry in iter_entries(
+        ledger, source_filter, date_from, date_to, project_filter,
+    ):
+        if entry.get('source') == 'agent_spawn':
             continue
-
-        if proj_needle and proj_needle not in entry.get('project', '').lower():
-            continue
-
-        try:
-            dt = entry_local_dt(entry)
-        except (ValueError, KeyError):
-            continue
-
         day_key = dt.strftime('%Y-%m-%d')
-
-        if date_from and day_key < date_from:
-            continue
-        if date_to and day_key > date_to:
-            continue
 
         day = daily_data[day_key]
 
@@ -74,21 +90,6 @@ def aggregate_by_day(ledger: Dict[str, Dict],
         day[FIELD_REQUESTS] += entry.get(FIELD_REQUESTS) or 1
 
     return dict(daily_data)
-
-
-def compute_date_window(days: Optional[int]) -> Optional[str]:
-    """Compute a ``date_from`` string that covers ``days`` active days.
-
-    Over-fetches by 2x to allow for inactive days inside the window.
-
-    Returns:
-      ``YYYY-MM-DD`` string, or ``None`` if ``days`` is ``None``.
-    """
-    if days is None:
-        return None
-    buffer_days = max(days * 2, days + 30)
-    cutoff = datetime.now() - timedelta(days=buffer_days)
-    return cutoff.strftime('%Y-%m-%d')
 
 
 def format_output(daily_data: Dict[str, Dict], limit_days: Optional[int] = None,
