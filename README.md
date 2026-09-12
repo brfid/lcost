@@ -1,293 +1,144 @@
 # lcost
 
-Tracks local query usage and token-rate estimates across Claude Code, Cline, and Codex / ChatGPT. Reads session files written by each tool, deduplicates against a local ledger, and reports token and price breakdowns across multiple providers (Anthropic, OpenAI, Amazon Bedrock, Google, Meta, Mistral).
+lcost shows token usage and query costs from local Claude Code, Cline, and
+Codex sessions. It combines their records in a ledger, with a terminal
+dashboard for comparing projects, models, and periods of activity.
 
-## Prerequisites
+![lcost demo: task sessions in token units, a heatmap fitted to active hours, and the selected query's price and tokens](docs/lcost-demo.png)
 
-- Python 3.9+
-- At least one supported source:
-  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (CLI)
-  - [Cline](https://github.com/cline/cline) (VS Code extension)
-  - Codex / ChatGPT (VS Code extension or CLI)
+The dashboard with synthetic data for a sample Monday afternoon. Press `m`
+to switch the board between price and tokens; the selected query shows both.
 
-For the interactive dashboard:
+## Install and try the demo
 
-- [textual](https://pypi.org/project/textual/)
-- [textual-plotext](https://pypi.org/project/textual-plotext/)
-
-Works best with a [Nerd Font](https://www.nerdfonts.com/) for full glyph coverage.
-
-## Install
+Requires Python 3.9 or later on macOS or Linux. Dashboard dependencies install
+with the package. A [Nerd Font](https://www.nerdfonts.com/) provides the full
+set of terminal glyphs.
 
 ```bash
 git clone https://github.com/brfid/lcost.git
 cd lcost
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e .
+lcost --demo
 ```
 
-After cloning, install the pre-commit hook to block accidental commits of runtime data:
+The demo supplies 60 days of sample history, with calls grouped into tasks,
+breaks, quiet nights, and lighter weekends. Today's calls appear as their
+scheduled times pass, so today can be empty before work or on a day off.
+Demo mode neither scans personal sessions nor reads or writes your ledger.
 
-```bash
-./scripts/install-hooks.sh
-```
+## Track your usage
 
-To include dashboard dependencies:
-
-```bash
-pip install -e '.[tui]'
-```
-
-### Migrating from `claudit`
-
-The package was renamed from `claudit` to `lcost`. On first run, lcost automatically renames legacy data/cache dirs:
-
-- `~/.local/share/claudit/` → `~/.local/share/lcost/`
-- `~/.cache/claudit/` → `~/.cache/lcost/`
-
-No manual migration needed. The old `claudit` CLI is gone — use `lcost`.
-
-## Get started
-
-Run with no arguments to launch the interactive dashboard:
+Run `lcost` to open the dashboard with your local session history. The
+collectors read files written by Claude Code, Cline, and Codex, including
+supported editor integrations. They leave those source files unchanged.
 
 ```bash
 lcost
-```
-
-Print a text report instead:
-
-```bash
 lcost --report
 ```
 
-## Usage
+The text report defaults to the last 30 days with activity. Use
+`lcost --demo --report` to print a report from the sample history.
 
-### Filter by time range
-
-```bash
-lcost --report --days 7                              # Last 7 active days
-lcost --report --all                                 # All days with activity
-lcost --report --from 2026-04-01 --to 2026-04-30    # Specific range
-```
-
-`--from` / `--to` are inclusive ISO dates. When either is set, it overrides `--days`.
-
-### Filter by source
+Source and project filters work in both modes:
 
 ```bash
-lcost --source cline         # Cline only
-lcost --source claude-code   # Claude Code only
-lcost --source codex         # Codex / ChatGPT only
+lcost --source codex
+lcost --source claude-code
+lcost --source cline --project techdocs
+lcost --report --days 7
+lcost --report --from 2026-04-01 --to 2026-04-30
 ```
 
-### Filter by project
+`--project` matches a case-insensitive substring of the stored project path.
+Date bounds are inclusive. `--days N` selects calendar days in the dashboard
+and active days in reports; see [date filtering](docs/reference.md#date-filtering)
+for the defaults and interaction with other options. `lcost --help` lists
+all command-line options.
 
-Case-insensitive substring match against the project path stored per entry:
+## Read the dashboard
 
-```bash
-lcost --project techdocs-tools
-lcost --project dotfiles --days 60
-```
+The board puts period summaries beside recent activity:
 
-### Inspect the ledger
+| Panel | Contents |
+| --- | --- |
+| Summary strip | Today, week to date, 30 days, token usage, cache efficiency, and daily/hourly usage rates |
+| Daily trend | Usage over 30 calendar days by default, including idle days |
+| Heatmap | Usage by hour and weekday; the hour range fits the selected data, retaining gaps between active hours |
+| Hourly activity | Today's usage across the full 24 hours |
+| Rankings | Today's leading projects, model mix, and stop reasons |
+| Call log | The 100 most recent queries, with a price and token breakdown for the selected query |
 
-```bash
-lcost --stats
-```
+On the board, `m` switches summaries, charts, project rankings, and call-log
+values between price and total tokens. In token mode, the cache summary
+shows the share of input served from cache. Query details always show both
+units and the separate input, output, and cache buckets.
 
-Prints file size, entry counts by source, date range, top projects, backup
-count, and per-source scan health (last success, records seen, and records
-added).
+The heatmap uses the same hour range across units in both views. With no
+activity, it shows the full day. The `h` key changes the hourly bar's metric
+independently; the next board unit change brings it back into the board's
+units.
 
-### Control scanning behavior
+The source strip shows today's usage and the age of each source's last
+successful scan. The dashboard refreshes every 30 seconds. New queries have
+a `★` marker, and subagent calls have `↳`. The status bar shows the current
+filters, units, entry count, and refresh state. In smaller terminals, the
+board hides charts or the query inspector to leave room for the call log.
 
-By default each run scans live data incrementally (unchanged files skipped, growing JSONL files resumed from the last byte offset). You can override:
+### Expand a panel
 
-```bash
-lcost --cached            # Skip scanning, report from stored data only
-lcost --rescan            # Ignore stored state, rescan all files from byte 0
-lcost --deep              # Re-parse every session file; keeps ledger entries, deduplicates
-lcost --max-gap-hours 12  # Auto-promote to deep rescan if last ingest was >12h ago (default: 24)
-```
-
-Use `--deep` when you suspect missed sessions. Use `--rescan` after recovering from a corrupt or missing ingest state.
-
-### Recalculate costs
-
-If a provider updates rates, recalculate stored costs against the current pricing table:
-
-```bash
-lcost --recalc --dry-run  # Preview changes without writing
-lcost --recalc            # Rewrite costs in the ledger
-```
-
-Entries with no configured rates are skipped and their stored cost is preserved. `--recalc` prints a `skipped` count alongside `changed`.
-
-### Other options
-
-| Flag | Description |
-|---|---|
-| `--verbose`, `-v` | Show source discovery and error details |
-| `--quiet`, `-q` | Suppress status messages |
-| `--ledger-path PATH` | Use a different ledger file location |
-
-## Dashboard
-
-Launch with `lcost` (the default mode).
-
-### Board
-
-The dashboard is a single dense board (btop-style): a KPI strip, a daily
-price-or-token trend chart beside an hour × weekday heatmap, a 24-hour
-activity bar, ranking panels, and the call log — all at once. Number keys
-expand one panel to fullscreen; `Esc` (or `0`) returns to the board.
-
-| Key | Expands | Contents |
-|---|---|---|
-| `1` | TREND | Daily time-series. `m` cycles cost / tokens I-O / cache tokens / savings |
-| `2` | HEATMAP | Hour × weekday heatmap. `m` cycles cost / requests / tokens |
-| `3` | LOG | Full call log: 100 most recent calls. `j`/`k` to move, `enter` for detail |
-| `4` | CALLS | Per-call cost distribution histogram |
-
-On the board, `m` switches both the trend and heatmap between token price and
-tokens. The all-source strip directly below the KPIs shows today's Codex,
-Claude Code, and Cline values plus the most recent scan freshness. `h` cycles
-the hourly bar (cost / tokens / requests). `]` / `[` cycle between the
-fullscreen panels.
-
-### Board contents
-
-The board always shows today's session activity:
-
-- **Session stats** — calls, cost, $/hr rate, cache efficiency, token totals
-- **Per-call distribution** — median, P95, max call cost
-- **Hourly heat strip** — 24-character braille sparkline of cost by hour
-- **Active projects** — top 6 with cost bars
-- **Model mix** — per-family color coding (Opus, Sonnet, Haiku, GPT-5, Nova, …)
-- **Stop reasons** — counts of `end_turn`, `tool_use`, `max_tokens`, etc.
-- **Call log** — 100 most recent calls with time, model, tokens, cache, cost bar, project, prompt preview
-
-New entries from auto-refresh are flagged with `★` and shown in bold. Subagent calls are marked with `↳`.
+| Key | Panel | Metric control |
+| --- | --- | --- |
+| `1` | TREND | `m` cycles price, input/output tokens, cache tokens, and savings |
+| `2` | HEATMAP | `m` cycles price, requests, and tokens |
+| `3` | LOG | Uses the board's selected units |
+| `4` | CALLS | Per-query price distribution |
 
 ### Controls
 
 | Key | Action |
-|---|---|
-| `q` | Quit |
-| `r` | Toggle auto-refresh (default: on, 30s) |
-| `?` | Show help |
-| `j` / `k` | Scroll down / up one line |
-| `J` / `K` | Scroll ten lines |
-| `ctrl+d` / `ctrl+u` | Page down / up |
-| `g` / `G` | Jump to top / bottom |
-| `1`–`4` | Expand a panel fullscreen (TREND / HEATMAP / LOG / CALLS) |
-| `0` / `esc` | Return to the board |
-| `]` / `[` | Next / previous fullscreen panel |
-| `enter` | Expand selected call (modal with full details) |
-| `m` | Switch board price / tokens; fullscreen: cycle that panel's metric |
-| `h` | Cycle hourly-bar metric: cost / tokens / requests |
-| `ctrl+c` | Quit |
+| --- | --- |
+| `m` | Switch board units or cycle the expanded panel's metric, as listed above |
+| `h` | Cycle the board's hourly bar through price, tokens, and requests |
+| `0` | Return to the board |
+| `Esc` | Close an open detail or help view, or return to the board |
+| `]` / `[` | Next / previous expanded panel |
+| `j` / `k` | Move down / up one query in the call log; scroll other panels |
+| `J` / `K`, `Ctrl+d` / `Ctrl+u` | Move down / up ten queries, or scroll ten lines in other panels |
+| `g` / `G` | First / last query, or top / bottom of the current panel |
+| `Enter` | Open the selected query's details |
+| `r` | Pause / resume automatic refresh |
+| `?` | Show help for the current view |
+| `q` / `Ctrl+c` | Quit |
 
+## Understand the numbers
 
-The status bar shows entry count, active days, refresh state, and a `+N new` badge when auto-refresh finds new entries.
+Cline supplies per-query costs in its session records. Claude Code and
+Codex costs are estimates calculated from token counts and configured model
+rates. These estimates do not allocate subscription fees or reproduce an
+account invoice. See [tokens and pricing](docs/reference.md#tokens-and-pricing)
+for the accounting rules and rate sources.
 
-## How it works
+The ledger retains ingested usage after source sessions are deleted. Repeated
+scans deduplicate entries and apply supported corrections. See the
+[reference](docs/reference.md) for scanning, recovery, cost recalculation,
+and stored data.
 
-On each run, lcost:
+## Development
 
-1. Scans session data from Cline, Claude Code, and Codex / ChatGPT.
-2. Deduplicates entries against a local `ledger.json` by entry ID.
-3. Back-fills missing fields on existing entries (handles schema evolution).
-4. Reports cost and token breakdowns from the ledger.
-
-Scanning is incremental — unchanged files are skipped and growing JSONL files resume from the last byte offset. State is stored in `ingest_state.json`.
-
-If more than `--max-gap-hours` have elapsed since the last ingest (default: 24h), lcost auto-promotes to a deep rescan, re-parsing every session file from byte zero. Dedup by entry ID keeps the result consistent. This is the safety net against Claude Code's session cleanup window — as long as you run lcost at least once per that window, no data is lost.
-
-The ledger is backed up daily to `backups/ledger-YYYY-MM-DD.json` (7 copies retained). To roll back, copy a backup over `ledger.json`.
-
-### Provider support
-
-Cline reports model IDs with provider prefixes when routing through AWS Bedrock or other gateways (e.g. `us.anthropic.claude-opus-4-7`, `us.openai.gpt-5-5`, `us.amazon.nova-pro-v1`). The collector strips recognized prefixes (`anthropic`, `openai`, `amazon`, `meta`, `mistral`, `cohere`, `ai21`, `google`, `deepseek`) so the same entry matches regardless of the gateway.
-
-Model family detection is substring-based with more-specific families listed first: `gpt-5-nano` matches before bare `gpt-5`. New families are added by appending to the `FAMILIES` list in `pricing.py`.
-
-### Claude Code entry fields
-
-Each ingested Claude Code call stores:
-
-- `source`, `ts`, `model` — provenance and timestamp
-- `project` — decoded filesystem path (greedy resolver handles dashes in real directory names)
-- `session` — JSONL filename stem
-- `isSubagent` — `true` if the session file is under `*/subagents/*`
-- `stopReason` — `end_turn`, `tool_use`, `max_tokens`, etc.
-- `promptPreview` — first 80 chars of the preceding user message (tool results excluded)
-- Token/cost fields: `tokensIn`, `tokensOut`, `cacheWrites`, `cacheReads`, `cost`, `cacheSavings`
-
-### Codex / ChatGPT entry fields
-
-Codex reads rollout JSONL from `$CODEX_HOME/sessions` and
-`$CODEX_HOME/archived_sessions` (default: `~/.codex/`). This includes the
-Codex VS Code extension's rollouts. It stores token-count observations and
-minimal session metadata only—never prompts, responses, tool payloads, or
-credentials.
-
-For each query, `tokensIn` excludes cache reads and cache writes; those
-numbers are recorded separately. Reasoning tokens are retained as metadata,
-but are not added again because they are already included in output tokens.
-
-### Pricing
-
-Pricing is per model family, keyed off a single `FAMILIES` registry in `lcost/pricing.py`. Rates are USD per million tokens.
-
-| Family | Input | Output | Cache write | Cache read | Source |
-|---|---|---|---|---|---|
-| Opus | 5.00 | 25.00 | 6.25 | 0.50 | [anthropic.com/pricing](https://www.anthropic.com/pricing) |
-| Sonnet | 3.00 | 15.00 | 3.75 | 0.30 | [anthropic.com/pricing](https://www.anthropic.com/pricing) |
-| Haiku | 1.00 | 5.00 | 1.25 | 0.10 | [anthropic.com/pricing](https://www.anthropic.com/pricing) |
-| GPT-5 | 1.25 | 10.00 | 1.25 | 0.125 | [openai.com/pricing](https://openai.com/api/pricing) |
-| GPT-5 mini | 0.25 | 2.00 | 0.25 | 0.025 | [openai.com/pricing](https://openai.com/api/pricing) |
-| GPT-5 nano | 0.05 | 0.40 | 0.05 | 0.005 | [openai.com/pricing](https://openai.com/api/pricing) |
-| GPT-5.6 Luna | 0.20 | 1.20 | 0.25 | 0.02 | Configured Codex Bedrock rate |
-| GPT-5.6 Terra | 2.00 | 12.00 | 2.50 | 0.20 | Configured Codex Bedrock rate |
-| GPT-5.6 Sol | 4.00 | 20.00 | 5.00 | 0.40 | Configured Codex Bedrock rate |
-
-Cline costs come from the provider's inline per-call data and are stored
-as-is. Claude Code and Codex costs are computed from the table above. Codex
-uses the active Bedrock model's token rate for a per-query estimate—lcost does
-not allocate ChatGPT or Codex subscription fees. Each new rate-card estimate
-retains a versioned `pricingRef` in the ledger. Use `--recalc` to recompute
-stored costs after a rate change; entries with no configured rates are
-skipped. Verify rates against each provider's pricing page if you suspect
-drift.
-
-### Data safety
-
-- **Survives session cleanup** — once ingested, entries persist in the ledger indefinitely.
-- **No double-counting** — re-scanning the same data is safe; dedup is by entry ID.
-- **Non-destructive** — lcost never modifies source data.
-
-## Data files
-
-All files are stored in `~/.local/share/lcost/` by default (`$XDG_DATA_HOME/lcost/` if set).
-
-| File | Description |
-|---|---|
-| `ledger.json` | All ingested API call records, keyed by unique entry ID |
-| `ingest_state.json` | Per-file byte offsets plus source scan health (safe to delete) |
-| `backups/ledger-YYYY-MM-DD.json` | Daily ledger snapshots, last 7 retained |
-
-Pidfile and caches live in `~/.cache/lcost/` (`$XDG_CACHE_HOME/lcost/` if set).
-
-## Tests
+Install the commit hook to keep runtime usage files out of Git, then install
+the test dependencies and run the suite:
 
 ```bash
-cd lcost
-pytest tests/ -v
+./scripts/install-hooks.sh
+pip install -e '.[test]'
+python -m pytest -q
 ```
 
-Covers: incremental ingest, file-state tracking, date/project/source filtering, model pricing fallback, prompt-preview extraction, schema-evolution back-fill, project-path resolution, subagent detection, gap-triggered deep rescan, backup rotation, orphan ingest-state cleanup, cross-provider model normalization, None-as-unpriced recalc semantics.
-
-## Platform support
-
-macOS, Windows, and Linux. Auto-detects OS-appropriate data directories for each source.
+Tests use synthetic sessions and temporary ledgers. The
+[CI workflow](.github/workflows/guard.yml) defines the tested Python versions
+and platforms. The [module guide](docs/reference.md#module-responsibilities)
+identifies where collection, storage, calculations, and presentation belong.
