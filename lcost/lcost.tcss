@@ -450,14 +450,11 @@ Sparkline > .sparkline--min-color {
     color: #CC9966;
 }
 
-/* Middle tier: trend chart + heatmap side by side.
-   min-height 18 keeps the trend plot tall enough for plotext to render
-   the x-axis date labels — it drops that row first under height pressure,
-   and the panel title/subtitle now ride the border instead of eating two
-   plot rows. */
+/* Middle tier: two rows per weekday, one hour-axis row and two borders.
+   Keep both charts at this height so weekdays stay equal and spare terminal
+   rows go to the call log and selected-query panel below. */
 #hud-mid {
-    height: 1fr;
-    min-height: 18;
+    height: 17;
     layout: horizontal;
     margin: 0;
 }
@@ -473,6 +470,11 @@ Sparkline > .sparkline--min-color {
     border-title-color: #FF9900;
     border-title-style: bold;
     border-subtitle-color: #9999CC;
+}
+
+/* Match the 15-row chart interior without clipping the date axis. */
+#hud-trend PlotextPlot {
+    min-height: 15;
 }
 
 #hud-heatmap {
