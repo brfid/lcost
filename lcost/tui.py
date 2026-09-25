@@ -323,7 +323,8 @@ class CostTrackerApp(App):
 
     def on_resize(self, event) -> None:
         if self._current_tab == BOARD:
-            self._apply_hud_density()
+            # App.size still holds the previous dimensions during Resize.
+            self.call_after_refresh(self._apply_hud_density)
 
     def _apply_hud_density(self) -> None:
         """Adapt board density to the available terminal dimensions."""
