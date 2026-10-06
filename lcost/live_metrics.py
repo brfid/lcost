@@ -13,6 +13,7 @@ from .aggregation import calendar_days
 from .formatters import (
     FIELD_CACHE_READS, FIELD_CACHE_SAVINGS, FIELD_CACHE_WRITES, FIELD_COST,
     FIELD_REQUESTS, FIELD_TOKENS_IN, FIELD_TOKENS_OUT, SOURCES,
+    FIELD_UNPRICED_REQUESTS, FIELD_UNPRICED_TOKENS,
     calculate_totals, total_tokens,
 )
 from .ops_data import (
@@ -92,6 +93,9 @@ class OverviewMetrics:
     cache_hit_label: str
     spark_7d_cache: List[float]
     spark_7d_cache_hits: List[float]
+    today_unpriced_requests: int
+    month_unpriced_requests: int
+    month_unpriced_tokens: int
 
 
 def _overview(daily: Dict[str, Dict], clock: ClockBucket) -> OverviewMetrics:
@@ -125,6 +129,9 @@ def _overview(daily: Dict[str, Dict], clock: ClockBucket) -> OverviewMetrics:
         cache_hit_label=(f"{totals[FIELD_CACHE_READS] / input_total * 100:.0f}% hits"
                          if input_total else "—"),
         spark_7d_cache=cache_sparks, spark_7d_cache_hits=hit_sparks,
+        today_unpriced_requests=daily.get(clock.day, {}).get(FIELD_UNPRICED_REQUESTS, 0),
+        month_unpriced_requests=totals[FIELD_UNPRICED_REQUESTS],
+        month_unpriced_tokens=totals[FIELD_UNPRICED_TOKENS],
     )
 
 

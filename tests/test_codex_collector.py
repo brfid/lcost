@@ -80,6 +80,19 @@ def _write_rollout(root: Path, rollout_id=ROLLOUT_ONE, *,
 
 
 class TestCodexCollector:
+    def test_gpt61_caching_and_recorded_service_tier_survive_ingestion(self, tmp_path):
+        records = _rollout_records()
+        records[2]["payload"].update({
+            "model": "us.openai.gpt-6.1-sol", "service_tier": "default",
+        })
+        entries, _ = parse_codex_session(_write_rollout(tmp_path, records=records))
+        entry = next(iter(entries.values()))
+        assert entry["cost"] == pytest.approx(0.002508)
+        assert entry["rawModel"] == "us.openai.gpt-6.1-sol"
+        assert entry["pricingRoute"] == "us"
+        assert entry["serviceTier"] == "default"
+        assert entry["pricingAssumptions"] == []
+
     def test_vscode_rollout_preserves_tokens_and_estimates_price(self, tmp_path):
         session_file = _write_rollout(tmp_path)
 
@@ -98,9 +111,9 @@ class TestCodexCollector:
         assert entry["cacheReads"] == 300
         assert entry["reasoningTokens"] == 20
         assert entry["reasoningTokensAdditive"] is False
-        assert entry["cost"] == pytest.approx(calculate_cost(
-            600, 80, 100, 300, "openai.gpt-5.6-luna",
-        ))
+        # Mantle/US inference includes AWS's 10% premium over Global rates.
+        assert entry["cost"] == pytest.approx(0.0002717)
+        assert entry["pricingRoute"] == "regional-or-us"
 
     def test_incremental_state_skips_unchanged_rollout(self, tmp_path):
         _write_rollout(tmp_path)

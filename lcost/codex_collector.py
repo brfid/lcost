@@ -26,10 +26,8 @@ from .formatters import (
 )
 from .ingest_state import file_needs_processing, update_file_state
 from .pricing import (
-    calculate_cache_savings,
-    calculate_cost,
+    estimate_entry,
     family_for_model,
-    has_priced_model,
 )
 
 
@@ -109,7 +107,9 @@ def parse_codex_session(session_file: Path,
     parent_session = ""
     active_turn = ""
     active_model: Optional[str] = None
-    turn_contexts: Dict[str, Tuple[Optional[str], str]] = {}
+    active_service_tier = None
+    active_inference_route = None
+    turn_contexts: Dict[str, Tuple] = {}
     request_sequence = 0
     previous_usage_fingerprint: Optional[tuple] = None
 
@@ -168,8 +168,8 @@ def parse_codex_session(session_file: Path,
                     turn_id = payload.get("turn_id")
                     if not isinstance(turn_id, str) or not turn_id:
                         continue
-                    known_model, known_project = turn_contexts.get(
-                        turn_id, (None, "")
+                    known_model, known_project, known_tier, known_route = turn_contexts.get(
+                        turn_id, (None, "", None, None)
                     )
                     model = payload.get("model")
                     context_model = model if isinstance(model, str) else known_model
@@ -179,9 +179,17 @@ def parse_codex_session(session_file: Path,
                         if isinstance(cwd, str)
                         else known_project
                     )
-                    turn_contexts[turn_id] = (context_model, context_project)
+                    tier = payload.get("service_tier")
+                    route = payload.get("inference_route")
+                    context_tier = tier if isinstance(tier, str) else known_tier
+                    context_route = route if isinstance(route, str) else known_route
+                    turn_contexts[turn_id] = (
+                        context_model, context_project, context_tier, context_route,
+                    )
                     if turn_id == active_turn:
                         active_model = context_model
+                        active_service_tier = context_tier
+                        active_inference_route = context_route
                         if context_project:
                             project = context_project
                     continue
@@ -194,8 +202,8 @@ def parse_codex_session(session_file: Path,
                     if not isinstance(turn_id, str) or not turn_id:
                         continue
                     active_turn = turn_id
-                    active_model, context_project = turn_contexts.get(
-                        turn_id, (None, "")
+                    active_model, context_project, active_service_tier, active_inference_route = turn_contexts.get(
+                        turn_id, (None, "", None, None)
                     )
                     if context_project:
                         project = context_project
@@ -208,6 +216,8 @@ def parse_codex_session(session_file: Path,
                     if not completed_turn or completed_turn == active_turn:
                         active_turn = ""
                         active_model = None
+                        active_service_tier = None
+                        active_inference_route = None
                         request_sequence = 0
                         previous_usage_fingerprint = None
                     continue
@@ -242,6 +252,8 @@ def parse_codex_session(session_file: Path,
                     model_provider=model_provider,
                     is_subagent=is_subagent,
                     parent_session=parent_session,
+                    service_tier=active_service_tier,
+                    inference_route=active_inference_route,
                 )
                 if entry is not None:
                     entries[_entry_id(rollout_id, active_turn, request_sequence)] = entry
@@ -303,6 +315,8 @@ def _entry_from_usage(*, usage: Dict, timestamp: object, session_id: str,
                       model: Optional[str], project: str, surface: str,
                       originator: str, model_provider: str,
                       is_subagent: bool, parent_session: str,
+                      service_tier: Optional[str] = None,
+                      inference_route: Optional[str] = None,
                       ) -> Optional[Dict]:
     ts = _normalize_timestamp(timestamp)
     if ts is None:
@@ -315,16 +329,11 @@ def _entry_from_usage(*, usage: Dict, timestamp: object, session_id: str,
     tokens_out = _nonnegative_int(usage.get("output_tokens"))
     reasoning_tokens = _nonnegative_int(usage.get("reasoning_output_tokens"))
 
-    cost = None
-    savings = 0.0
-    if model and family_for_model(model) and has_priced_model(model):
-        cost = calculate_cost(tokens_in, tokens_out, cache_writes, cache_reads, model)
-        savings = calculate_cache_savings(cache_reads, model)
-
-    return {
+    entry = {
         "source": "codex",
         "ts": ts,
         "model": model,
+        "rawModel": model,
         "project": project,
         "session": session_id,
         "rollout": rollout_id,
@@ -344,9 +353,18 @@ def _entry_from_usage(*, usage: Dict, timestamp: object, session_id: str,
         FIELD_TOKENS_OUT: tokens_out,
         FIELD_CACHE_WRITES: cache_writes,
         FIELD_CACHE_READS: cache_reads,
-        FIELD_COST: cost,
-        FIELD_CACHE_SAVINGS: savings,
+        FIELD_COST: None,
+        FIELD_CACHE_SAVINGS: 0.0,
     }
+    if service_tier is not None:
+        entry["serviceTier"] = service_tier
+    if inference_route is not None:
+        entry["inferenceRoute"] = inference_route
+    if model and family_for_model(model):
+        estimate = estimate_entry(entry)
+        if estimate is not None:
+            entry.update(estimate)
+    return entry
 
 
 def _entry_id(rollout_id: str, turn_id: str, sequence: int) -> str:

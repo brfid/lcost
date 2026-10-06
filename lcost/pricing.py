@@ -17,12 +17,13 @@ must not silently reprice a GPT-class entry with Sonnet rates. Callers
 check for `None` and leave the stored cost alone.
 """
 
+import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Mapping, Optional, Tuple
 
 # Bump this when any configured token price changes. New entries retain this
 # reference so a future rate change is explainable without account billing.
-RATE_CARD_VERSION = "2026-08-25"
+RATE_CARD_VERSION = "2026-10-06"
 
 # USD per million tokens
 # Source: https://www.anthropic.com/pricing  (verify quarterly — update here if stale)
@@ -37,8 +38,8 @@ HAIKU_PRICING = {
 }
 
 # Source: openai.com/pricing — published GPT-5 family rates (USD/MTok).
-# These are published Azure/OpenAI direct rates; AWS Bedrock may charge a
-# small premium. Update here if Bedrock's rate card diverges materially.
+# These are base OpenAI direct rates. Bedrock GPT-5.6 and GPT-6 quotes select
+# routing-specific rates below; older GPT families retain these legacy rates.
 GPT5_PRICING = {
     'input': 1.25, 'output': 10.00, 'cache_write': 1.25, 'cache_read': 0.125,
 }
@@ -61,6 +62,46 @@ GPT56_LUNA_PRICING = {
     'input': 0.20, 'output': 1.20, 'cache_write': 0.25, 'cache_read': 0.02,
 }
 
+# AWS Standard Global CRIS prices, verified 2026-10-06 against the model cards
+# linked below. Mantle and US geographic inference include a 10% premium.
+GPT6_LUNA_PRICING = {
+    'input': 0.10, 'output': 0.50, 'cache_write': 0.125, 'cache_read': 0.01,
+}
+GPT6_SOL_PRICING = {
+    'input': 2.00, 'output': 10.00, 'cache_write': 2.50, 'cache_read': 0.20,
+}
+GPT6_ASTRA_PRICING = {
+    'input': 10.00, 'output': 50.00, 'cache_write': 12.50, 'cache_read': 1.00,
+}
+GPT61_SOL_PRICING = {
+    'input': 2.00, 'output': 10.00, 'cache_write': 2.50, 'cache_read': 0.10,
+}
+
+_AWS_CARD_ROOT = "https://docs.aws.amazon.com/bedrock/latest/userguide/"
+BEDROCK_MODEL_CARDS = {
+    "gpt-5.6-luna": _AWS_CARD_ROOT + "model-card-openai-gpt-56-luna.html",
+    "gpt-5.6-terra": _AWS_CARD_ROOT + "model-card-openai-gpt-56-terra.html",
+    "gpt-5.6-sol": _AWS_CARD_ROOT + "model-card-openai-gpt-56-sol.html",
+    "gpt-6-luna": _AWS_CARD_ROOT + "model-card-openai-gpt-6-luna.html",
+    "gpt-6-sol": _AWS_CARD_ROOT + "model-card-openai-gpt-6-sol.html",
+    "gpt-6-astra": _AWS_CARD_ROOT + "model-card-openai-gpt-6-astra.html",
+    "gpt-6.1-sol": _AWS_CARD_ROOT + "model-card-openai-gpt-6-1-sol.html",
+}
+LONG_CONTEXT_THRESHOLD = 272_000
+_GPT6_KEYS = frozenset(("gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "gpt-6.1-sol"))
+_MODEL_ALIASES = {
+    "gpt-6-1-sol": "gpt-6.1-sol",
+    **{f"gpt-5-6-{name}": f"gpt-5.6-{name}" for name in ("sol", "terra", "luna")},
+}
+
+
+def canonical_model_id(model: Optional[str]) -> str:
+    """Normalize documented IDs without discarding routing in stored records."""
+    lowered = (model or "").lower()
+    lowered = re.sub(r"^(us|global|eu|apac|apne|apse)\.", "", lowered)
+    lowered = re.sub(r"^(openai|anthropic|amazon|meta|mistral)\.", "", lowered)
+    return _MODEL_ALIASES.get(lowered, lowered)
+
 
 @dataclass(frozen=True)
 class ModelFamily:
@@ -81,6 +122,11 @@ FAMILIES: List[ModelFamily] = [
     ModelFamily("opus",   ("opus",),               "#FF9900", OPUS_PRICING),
     ModelFamily("sonnet", ("sonnet",),             "#9999CC", SONNET_PRICING),
     ModelFamily("haiku",  ("haiku",),              "#CC6699", HAIKU_PRICING),
+    ModelFamily("gpt-6.1-sol", ("gpt-6.1-sol", "gpt-6-1-sol"),
+                "#5ABF8B", GPT61_SOL_PRICING),
+    ModelFamily("gpt-6-astra", ("gpt-6-astra",), "#B58AE0", GPT6_ASTRA_PRICING),
+    ModelFamily("gpt-6-sol", ("gpt-6-sol",), "#43A97C", GPT6_SOL_PRICING),
+    ModelFamily("gpt-6-luna", ("gpt-6-luna",), "#79BEDB", GPT6_LUNA_PRICING),
     # OpenAI (most specific first so gpt-5-nano doesn't match bare gpt-5)
     ModelFamily(
         "gpt-5.6-luna", ("gpt-5.6-luna", "gpt-5-6-luna"),
@@ -135,7 +181,13 @@ def family_for_model(model: Optional[str]) -> Optional[ModelFamily]:
     if not model:
         return None
     lowered = model.lower()
+    canonical = canonical_model_id(model)
+    if canonical in _GPT6_KEYS:
+        return FAMILIES_BY_KEY[canonical]
     for fam in FAMILIES:
+        # An unknown suffix/version must not inherit a verified GPT-6 price.
+        if fam.key in _GPT6_KEYS:
+            continue
         if any(tok in lowered for tok in fam.tokens):
             return fam
     return None
@@ -167,26 +219,161 @@ def has_priced_model(model: Optional[str]) -> bool:
     return get_model_pricing(model) is not None
 
 
-def pricing_reference_for_model(model: Optional[str]) -> Optional[str]:
+def pricing_reference_for_model(model: Optional[str], **context) -> Optional[str]:
     """Return a stable reference for the configured token rate used.
 
     ``None`` means the model family is known but deliberately unpriced.
     Completely unknown legacy models retain the explicit default reference.
     """
-    if not has_priced_model(model):
+    quote = quote_pricing(model, **context)
+    return quote.reference if quote is not None else None
+
+
+@dataclass(frozen=True)
+class PriceQuote:
+    rates: Dict[str, float]
+    reference: str
+    source: Optional[str] = None
+    route: Optional[str] = None
+    tier: Optional[str] = None
+    context: Optional[str] = None
+    assumptions: Tuple[str, ...] = ()
+
+
+def quote_pricing(model: Optional[str], *, provider: Optional[str] = None,
+                  inference_route: Optional[str] = None,
+                  service_tier: Optional[str] = None,
+                  input_tokens: Optional[int] = None,
+                  assume_route: Optional[str] = None) -> Optional[PriceQuote]:
+    """Select a verified price, retaining assumptions for an incomplete record."""
+    rates = get_model_pricing(model)
+    if rates is None:
         return None
     family = family_for_model(model)
     key = family.key if family is not None else "default"
-    return f"rate-card:{RATE_CARD_VERSION}:{key}"
+    canonical = canonical_model_id(model)
+    raw = (model or "").lower()
+    bedrock = ("bedrock" in (provider or "").lower()
+               or raw.startswith(("us.openai.", "global.openai.")))
+    contextual = canonical in _GPT6_KEYS or (
+        bedrock and canonical in BEDROCK_MODEL_CARDS
+    )
+    if not contextual:
+        return PriceQuote(dict(rates), f"rate-card:{RATE_CARD_VERSION}:{key}")
+
+    assumptions = []
+    if not provider and not bedrock:
+        assumptions.append("Provider not recorded; using OpenAI Standard base rates.")
+    route = inference_route
+    if route is None and raw.startswith("global.openai."):
+        route = "global"
+    elif route is None and raw.startswith("us.openai."):
+        route = "us"
+    if bedrock and route is None:
+        route = assume_route or "regional-or-us"
+        assumptions.append(f"Bedrock route not recorded; assumed {route}.")
+    elif not bedrock:
+        if route is not None:
+            return None
+        route = "direct"
+    if route not in ("direct", "global", "us", "regional", "regional-or-us"):
+        return None
+
+    tier = (service_tier or "standard").lower()
+    if tier == "default":
+        tier = "standard"
+    if tier not in ("standard", "ultrafast"):
+        return None
+    if tier == "ultrafast" and canonical != "gpt-6-astra":
+        return None
+    if service_tier is None:
+        assumptions.append("Service tier not recorded; assumed Standard.")
+    if input_tokens is None:
+        return None
+    context = "long" if input_tokens > LONG_CONTEXT_THRESHOLD else "short"
+    multiplier = 1.1 if route in ("us", "regional", "regional-or-us") else 1.0
+    if tier == "ultrafast":
+        multiplier *= 6
+    selected = {
+        bucket: price * multiplier * (
+            1.5 if bucket == "output" else 2
+        ) if context == "long" else price * multiplier
+        for bucket, price in rates.items()
+    }
+    reference = f"rate-card:{RATE_CARD_VERSION}:{canonical}:{route}:{tier}:{context}"
+    return PriceQuote(selected, reference, BEDROCK_MODEL_CARDS[canonical],
+                      route, tier, context, tuple(assumptions))
+
+
+def pricing_context_for_entry(entry: Mapping) -> Dict:
+    """Use the recorded request input, including both cache buckets."""
+    input_tokens = entry.get("reportedInputTokens")
+    if not isinstance(input_tokens, int) or isinstance(input_tokens, bool) or input_tokens < 0:
+        values = [entry.get(field) for field in ("tokensIn", "cacheWrites", "cacheReads")]
+        input_tokens = sum(values) if all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in values
+        ) else None
+    return {
+        "provider": entry.get("modelProvider"),
+        "inference_route": entry.get("inferenceRoute"),
+        "service_tier": entry.get("serviceTier"),
+        "input_tokens": input_tokens,
+    }
+
+
+def quote_for_entry(entry: Mapping, *, assume_route: Optional[str] = None
+                    ) -> Optional[PriceQuote]:
+    model = entry.get("rawModel") or entry.get("model")
+    if not isinstance(model, str) or not model:
+        return None
+    return quote_pricing(model, assume_route=assume_route,
+                         **pricing_context_for_entry(entry))
+
+
+def quote_metadata(quote: PriceQuote) -> Dict:
+    metadata = {"pricingRef": quote.reference}
+    if quote.source is not None:
+        metadata.update({
+            "pricingSource": quote.source, "pricingVerifiedAt": RATE_CARD_VERSION,
+            "pricingRoute": quote.route, "pricingTier": quote.tier,
+            "pricingContext": quote.context,
+            "pricingAssumptions": list(quote.assumptions),
+        })
+    return metadata
+
+
+def estimate_entry(entry: Mapping, *, assume_route: Optional[str] = None
+                   ) -> Optional[Dict]:
+    """Calculate complete usage buckets without charging reasoning twice."""
+    values = [entry.get(field) for field in
+              ("tokensIn", "tokensOut", "cacheWrites", "cacheReads")]
+    if not all(isinstance(value, int) and not isinstance(value, bool) and value >= 0
+               for value in values):
+        return None
+    quote = quote_for_entry(entry, assume_route=assume_route)
+    if quote is None:
+        return None
+    ti, to, cw, cr = values
+    rates = quote.rates
+    return {
+        "cost": (ti * rates["input"] + to * rates["output"]
+                 + cw * rates["cache_write"] + cr * rates["cache_read"]) / 1_000_000,
+        "cacheSavings": cr * (rates["input"] - rates["cache_read"]) / 1_000_000,
+        "costProvenance": "rate_card_estimate",
+        **quote_metadata(quote),
+    }
 
 
 def calculate_cost(tokens_in: int, tokens_out: int, cache_writes: int,
-                   cache_reads: int, model: Optional[str] = None
+                   cache_reads: int, model: Optional[str] = None, **context
                    ) -> Optional[float]:
     """Calculate USD cost from token counts. ``None`` when rates are absent."""
-    pricing = get_model_pricing(model)
-    if pricing is None:
+    context.setdefault("input_tokens", tokens_in + cache_writes + cache_reads)
+    quote = quote_pricing(model, **context)
+    if quote is None:
         return None
+    pricing = quote.rates
     return (
         tokens_in * pricing['input']
         + tokens_out * pricing['output']
@@ -196,12 +383,14 @@ def calculate_cost(tokens_in: int, tokens_out: int, cache_writes: int,
 
 
 def calculate_cache_savings(cache_reads: int,
-                            model: Optional[str] = None) -> float:
+                            model: Optional[str] = None, **context) -> float:
     """Calculate cost savings from prompt caching. 0.0 when rates absent."""
     if cache_reads == 0:
         return 0.0
-    pricing = get_model_pricing(model)
-    if pricing is None:
+    context.setdefault("input_tokens", cache_reads)
+    quote = quote_pricing(model, **context)
+    if quote is None:
         return 0.0
+    pricing = quote.rates
     savings_per_million = pricing['input'] - pricing['cache_read']
     return (cache_reads * savings_per_million) / 1_000_000

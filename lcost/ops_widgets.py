@@ -466,6 +466,8 @@ class EntryDetailScreen(ModalScreen):
             f"cache_r={format_number(e.get(FIELD_CACHE_READS))}",
             f"Cost:     {format_cost(e.get(FIELD_COST))}  "
             f"(saved {format_cost(e.get(FIELD_CACHE_SAVINGS))})",
+            f"Pricing:  {safe(e.get('pricingRef') or e.get('costProvenance') or 'unavailable')}",
+            *[f"Assumption: {safe(value)}" for value in e.get("pricingAssumptions") or []],
             "",
             "[b]Prompt preview:[/b]",
             preview,

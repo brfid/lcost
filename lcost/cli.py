@@ -140,6 +140,26 @@ Examples:
         help='with --recalc: show what would change without writing to disk'
     )
     parser.add_argument(
+        '--model', action='append', metavar='MODEL',
+        help='with --recalc: select an exact model ID; repeat to select several'
+    )
+    parser.add_argument(
+        '--provider', metavar='PROVIDER',
+        help='with --recalc: select the recorded model provider'
+    )
+    parser.add_argument(
+        '--only-unpriced', action='store_true',
+        help='with --recalc: fill only entries whose cost is unknown'
+    )
+    parser.add_argument(
+        '--include-source-reported', action='store_true',
+        help='with --recalc: allow replacing Cline or other source-reported costs'
+    )
+    parser.add_argument(
+        '--assume-bedrock-route', choices=('regional', 'us', 'global'),
+        help='with --recalc: assume this route only when Bedrock routing is unrecorded'
+    )
+    parser.add_argument(
         '--deep', action='store_true',
         help='re-parse available sessions, retaining ledger entries and '
              'deduplicating by entry ID'
@@ -156,6 +176,11 @@ Examples:
     args = parser.parse_args()
     if args.demo and (args.stats or args.recalc):
         parser.error("--demo is available for the dashboard and --report")
+    if not args.recalc and (
+        args.model or args.provider or args.only_unpriced
+        or args.include_source_reported or args.assume_bedrock_route
+    ):
+        parser.error("model/provider selection and pricing overrides require --recalc")
     if args.date_from and args.date_to and args.date_from > args.date_to:
         parser.error("--from must be on or before --to")
     return args
@@ -282,20 +307,50 @@ def main():
         ledger = build_demo_ledger() if args.demo else load_ledger(ledger_path)
 
     if args.recalc:
+        from .pidfile import AlreadyRunning, single_instance
+
         dry = args.dry_run
-        old, new, changed, skipped = recalc_ledger_costs(
-            ledger_path, ledger, dry_run=dry,
-        )
+        summary = {}
+        source_filter = None if args.source == 'all' else SOURCE_MAP.get(args.source, args.source)
+        try:
+            with (nullcontext() if dry else single_instance()):
+                # Reload after acquiring the writer lock to avoid a stale copy.
+                ledger = load_ledger(ledger_path)
+                old, new, changed, skipped = recalc_ledger_costs(
+                    ledger_path, ledger, dry_run=dry, source_filter=source_filter,
+                    model_filters=args.model, provider_filter=args.provider,
+                    only_unpriced=args.only_unpriced,
+                    include_source_reported=args.include_source_reported,
+                    assume_route=args.assume_bedrock_route,
+                    date_from=args.date_from, date_to=args.date_to,
+                    project_filter=args.project, summary=summary,
+                )
+        except AlreadyRunning as exc:
+            print(str(exc))
+            print("Stop the dashboard before writing recalculated costs.")
+            return 1
         label = "[dry run] " if dry else ""
         print(f"{label}Entries changed: {changed:,}")
         if skipped:
             print(f"{label}Entries skipped: {skipped:,} (incomplete token data or "
-                  f"no configured pricing; cost preserved)")
-        print(f"{label}Old total: ${old:,.2f}")
-        print(f"{label}New total: ${new:,.2f}")
+                  f"no configured pricing, or source-reported cost preserved)")
+        print(f"{label}Old selected total: ${old:,.2f}")
+        print(f"{label}New selected total: ${new:,.2f}")
         print(f"{label}Difference: ${new - old:,.2f}")
+        for model, group in sorted(summary.items()):
+            if model.startswith("_"):
+                continue
+            print(f"{label}{model}: {group['entries']:,} eligible, "
+                  f"{group['changed']:,} changed, "
+                  f"${group['old']:.4f} → ${group['new']:.4f}")
+            for reference in sorted(group["references"]):
+                print(f"  {reference}")
+            for assumption in sorted(group["assumptions"]):
+                print(f"  Assumption: {assumption}")
         if not dry and changed > 0:
             print(f"Ledger written to {ledger_path}")
+            if "_backup" in summary:
+                print(f"Backup: {summary['_backup']}")
         return 0
 
     if args.stats:

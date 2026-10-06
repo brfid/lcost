@@ -35,12 +35,11 @@ from .ingest_state import (
     update_file_state as update_file_state,
 )
 from .pricing import (
-    calculate_cache_savings,
-    calculate_cost,
-    pricing_reference_for_model,
+    canonical_model_id,
+    estimate_entry,
 )
 from .usage import (
-    COST_PROVENANCE_RATE_CARD,
+    COST_PROVENANCE_SOURCE_REPORTED,
     normalize_usage_entry,
 )
 
@@ -146,6 +145,13 @@ def merge_entries(ledger: Dict[str, Dict], new_entries: Dict[str, Dict]) -> Merg
             changed = False
             is_cline = existing.get('source') == 'cline'
             for k, v in entry_data.items():
+                # A reparse can use a newer rate card while an existing cost
+                # remains pinned. Do not backfill metadata for a different price.
+                if (k.startswith("pricing") or k == "costProvenance") and (
+                    existing.get(FIELD_COST) is not None
+                    and existing.get(FIELD_COST) != entry_data.get(FIELD_COST)
+                ):
+                    continue
                 if k not in existing or existing[k] is None:
                     if v not in (None, ""):
                         existing[k] = v
@@ -166,15 +172,24 @@ def ingest(ledger: Dict[str, Dict], new_entries: Dict[str, Dict]) -> int:
 
 
 def recalc_ledger_costs(ledger_path: Path, ledger: Dict[str, Dict],
-                        dry_run: bool = False
+                        dry_run: bool = False, *,
+                        source_filter: Optional[str] = None,
+                        model_filters=None, provider_filter: Optional[str] = None,
+                        only_unpriced: bool = False,
+                        include_source_reported: bool = False,
+                        assume_route: Optional[str] = None,
+                        date_from: Optional[str] = None,
+                        date_to: Optional[str] = None,
+                        project_filter: Optional[str] = None,
+                        summary: Optional[Dict] = None,
                         ) -> Tuple[float, float, int, int]:
-    """Recompute ``cost`` and ``cacheSavings`` for every entry using current rates.
+    """Recompute selected entries, preserving source-reported costs by default.
 
     Writes the ledger to disk when any values change, unless ``dry_run`` is
     true. Entries with no token data (e.g. synthetic agent-spawn entries)
-    are left alone. Entries whose model has no configured pricing (returns
-    ``None`` from ``calculate_cost``) are preserved as-is — we don't
-    reprice a GPT-class entry with Sonnet rates.
+    are left alone. Entries without complete supported pricing are preserved.
+    Source, exact model, provider, project, and explicit date filters limit the
+    selection; ``only_unpriced`` excludes all previously priced entries.
 
     Args:
       ledger_path: Path used when writing the updated ledger.
@@ -183,14 +198,35 @@ def recalc_ledger_costs(ledger_path: Path, ledger: Dict[str, Dict],
 
     Returns:
       ``(old_total, new_total, entries_changed, entries_skipped)``. Skipped
-      counts entries that had tokens + a model but no available rates.
+      counts selected entries with incomplete tokens, unsupported pricing,
+      or a preserved source-reported cost.
     """
     old_total = 0.0
     new_total = 0.0
     changed = 0
     skipped = 0
 
-    for entry in ledger.values():
+    from .aggregation import iter_entries
+
+    models = {canonical_model_id(model) for model in model_filters or ()}
+    # Keep timestamp-less legacy entries eligible when no date filter was asked.
+    if date_from or date_to:
+        candidates = (entry for _, _, entry in iter_entries(
+            ledger, source_filter, date_from, date_to, project_filter,
+        ))
+    else:
+        candidates = (entry for entry in ledger.values() if isinstance(entry, dict))
+    for entry in candidates:
+        if source_filter and entry.get("source") != source_filter:
+            continue
+        if models and canonical_model_id(entry.get("rawModel") or entry.get("model")) not in models:
+            continue
+        if provider_filter and str(entry.get("modelProvider") or "").casefold() != provider_filter.casefold():
+            continue
+        if project_filter and project_filter.casefold() not in str(entry.get("project") or "").casefold():
+            continue
+        if only_unpriced and entry.get(FIELD_COST) is not None:
+            continue
         token_values = (
             entry.get(FIELD_TOKENS_IN),
             entry.get(FIELD_TOKENS_OUT),
@@ -201,6 +237,16 @@ def recalc_ledger_costs(ledger_path: Path, ledger: Dict[str, Dict],
 
         old_cost = entry.get(FIELD_COST) or 0.0
         old_total += old_cost
+
+        if not include_source_reported and (
+            entry.get("costProvenance") == COST_PROVENANCE_SOURCE_REPORTED
+            or (entry.get("source") == "cline"
+                and entry.get("costProvenance") != "rate_card_estimate"
+                and entry.get(FIELD_COST) is not None)
+        ):
+            new_total += old_cost
+            skipped += 1
+            continue
 
         # Explicitly unknown token components cannot be safely repriced:
         # treating them as zero would understate a query's token-rate cost.
@@ -222,8 +268,8 @@ def recalc_ledger_costs(ledger_path: Path, ledger: Dict[str, Dict],
             new_total += old_cost
             continue
 
-        new_cost = calculate_cost(ti, to, cw, cr, model)
-        if new_cost is None:
+        estimate = estimate_entry(entry, assume_route=assume_route)
+        if estimate is None:
             # Family known, rates not configured (placeholder). Preserve
             # whatever cost the collector stored — for Cline that's the
             # provider-reported cost; for CC it's the last-known rate.
@@ -231,20 +277,35 @@ def recalc_ledger_costs(ledger_path: Path, ledger: Dict[str, Dict],
             skipped += 1
             continue
 
-        new_savings = calculate_cache_savings(cr, model)
+        new_cost = estimate[FIELD_COST]
         new_total += new_cost
-
-        if new_cost != old_cost:
+        updates = {key: value for key, value in estimate.items()
+                   if entry.get(key) != value}
+        if summary is not None:
+            name = canonical_model_id(entry.get("rawModel") or model)
+            group = summary.setdefault(name, {
+                "entries": 0, "changed": 0, "old": 0.0, "new": 0.0,
+                "references": set(), "assumptions": set(),
+            })
+            group["entries"] += 1
+            group["changed"] += bool(updates)
+            group["old"] += old_cost
+            group["new"] += new_cost
+            group["references"].add(estimate["pricingRef"])
+            group["assumptions"].update(estimate.get("pricingAssumptions", []))
+        if updates:
             if not dry_run:
-                entry[FIELD_COST] = new_cost
-                entry[FIELD_CACHE_SAVINGS] = new_savings
-                entry["costProvenance"] = COST_PROVENANCE_RATE_CARD
-                pricing_ref = pricing_reference_for_model(model)
-                if pricing_ref is not None:
-                    entry["pricingRef"] = pricing_ref
+                entry.update(updates)
             changed += 1
 
     if not dry_run and changed > 0:
+        if ledger_path.exists():
+            backups = backup_dir(ledger_path)
+            backups.mkdir(parents=True, exist_ok=True)
+            backup = backups / f"recalc-{datetime.now():%Y-%m-%dT%H%M%S%f}.json"
+            shutil.copy2(ledger_path, backup)
+            if summary is not None:
+                summary["_backup"] = str(backup)
         save_ledger(ledger_path, ledger)
 
     return old_total, new_total, changed, skipped

@@ -5,8 +5,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 
 from .formatters import (
-    FIELD_NAMES, FIELD_REQUESTS, calculate_averages, calculate_totals,
-    format_table_header, format_table_row, init_field_dict,
+    FIELD_COST, FIELD_NAMES, FIELD_REQUESTS, FIELD_UNPRICED_REQUESTS,
+    FIELD_UNPRICED_TOKENS, calculate_averages, calculate_totals,
+    format_table_header, format_table_row, init_field_dict, total_tokens,
 )
 
 
@@ -83,11 +84,14 @@ def aggregate_by_day(ledger: Dict[str, Dict],
         day = daily_data[day_key]
 
         for field in FIELD_NAMES:
-            if field == FIELD_REQUESTS:
+            if field in (FIELD_REQUESTS, FIELD_UNPRICED_REQUESTS, FIELD_UNPRICED_TOKENS):
                 continue
             day[field] += entry.get(field) or 0
 
         day[FIELD_REQUESTS] += entry.get(FIELD_REQUESTS) or 1
+        if entry.get(FIELD_COST) is None:
+            day[FIELD_UNPRICED_REQUESTS] += entry.get(FIELD_REQUESTS) or 1
+            day[FIELD_UNPRICED_TOKENS] += total_tokens(entry)
 
     return dict(daily_data)
 
@@ -117,5 +121,11 @@ def format_output(daily_data: Dict[str, Dict], limit_days: Optional[int] = None,
 
     averages = calculate_averages(totals, len(sorted_days))
     lines.append(format_table_row("AVERAGE", averages))
+    if totals[FIELD_UNPRICED_REQUESTS]:
+        lines.append(
+            f"\nPARTIAL PRICE: {totals[FIELD_UNPRICED_REQUESTS]:,} unpriced requests "
+            f"({totals[FIELD_UNPRICED_TOKENS]:,} tokens). "
+            "Monetary totals exclude this usage."
+        )
 
     return "\n".join(lines)
