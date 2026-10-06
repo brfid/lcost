@@ -422,4 +422,3 @@ class TestAggregateTodaySpawns:
         assert s["spawn_count"] == 3
         assert s["subagent_type_counts"]["Explore"] == 2
         assert s["subagent_type_counts"]["general-purpose"] == 1
-

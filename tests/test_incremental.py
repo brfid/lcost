@@ -674,12 +674,12 @@ class TestProjectFilter:
         }
 
     def test_matches_substring(self):
-        daily = aggregate_by_day(self._make_ledger(), project_filter="techdocs")
+        daily = aggregate_by_day(self._make_ledger(), project_filter="example")
         assert "2026-04-10" in daily
         assert "2026-04-15" not in daily
 
     def test_case_insensitive(self):
-        daily = aggregate_by_day(self._make_ledger(), project_filter="TECHDOCS")
+        daily = aggregate_by_day(self._make_ledger(), project_filter="EXAMPLE")
         assert "2026-04-10" in daily
 
     def test_no_match(self):
