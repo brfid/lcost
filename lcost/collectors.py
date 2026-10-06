@@ -413,7 +413,7 @@ def find_claude_code_session_files(base_path: Path) -> List[Path]:
 
 @functools.lru_cache(maxsize=512)
 def _resolve_project_slug(slug: str) -> str:
-    """Resolve a CC project slug like `-Users-bfidler-src-foo` to a readable path.
+    """Resolve a CC project slug like `-Users-example-src-foo` to a readable path.
 
     Dashes serve double duty — path separator *and* legitimate character in
     directory names. We greedily match the longest real directory at each
@@ -445,7 +445,7 @@ def _resolve_project_slug(slug: str) -> str:
 def _project_from_session_path(session_file: Path) -> str:
     """Derive a readable project path from a CC session file path.
 
-    ~/.claude/projects/-Users-bfidler-src-techdocs-tools/abc.jsonl → ~/src/techdocs-tools
+    ~/.claude/projects/-Users-example-src-example-tools/abc.jsonl → ~/src/example-tools
     """
     projects_dir = get_claude_code_dir() / "projects"
     try:
@@ -757,4 +757,3 @@ def collect_claude_code_data(verbose: bool,
                   f"(expected for resumed sessions)")
 
     return all_entries
-

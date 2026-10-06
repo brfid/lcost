@@ -111,7 +111,7 @@ estimate for a new model.
 
 ### GPT models on Amazon Bedrock
 
-The configured GPT-6 models are `gpt-6-luna`, `gpt-6-sol`, `gpt-6-astra`,
+The supported GPT-6 models are `gpt-6-luna`, `gpt-6-sol`, `gpt-6-astra`,
 and `gpt-6.1-sol`. Bare IDs, provider-prefixed IDs, and `us.openai.` or
 `global.openai.` inference IDs retain distinct model labels. Unknown GPT-6
 versions remain unpriced.

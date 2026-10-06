@@ -43,7 +43,7 @@ class TestModelColor:
 
 class TestShortProject:
     def test_basename(self):
-        assert short_project("~/src/techdocs-tools") == "techdocs-tools"
+        assert short_project("~/src/example-tools") == "example-tools"
 
     def test_trailing_slash(self):
         assert short_project("/foo/bar/") == "bar"
@@ -422,4 +422,3 @@ class TestAggregateTodaySpawns:
         assert s["spawn_count"] == 3
         assert s["subagent_type_counts"]["Explore"] == 2
         assert s["subagent_type_counts"]["general-purpose"] == 1
-

@@ -48,7 +48,7 @@ Source and project filters work in both modes:
 ```bash
 lcost --source codex
 lcost --source claude-code
-lcost --source cline --project techdocs
+lcost --source cline --project example
 lcost --report --days 7
 lcost --report --from 2026-04-01 --to 2026-04-30
 ```

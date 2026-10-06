@@ -539,16 +539,16 @@ class TestProjectFromSessionPath:
 
     def test_greedy_resolves_dashed_names(self, tmp_path, monkeypatch):
         """Verify greedy resolver picks longest real directory at each level."""
-        # Build a fake ~/.claude/projects/-tmp-DIR-techdocs-tools/ layout where
+        # Build a fake ~/.claude/projects/-tmp-DIR-example-tools/ layout where
         # the slug has to be decoded against a real filesystem.
         fake_home = tmp_path
         fake_cc = fake_home / ".claude"
         projects_dir = fake_cc / "projects"
-        # Create real target: tmp_path / "techdocs-tools" (dash in real dirname)
-        real_target = tmp_path / "techdocs-tools"
+        # Create real target: tmp_path / "example-tools" (dash in real dirname)
+        real_target = tmp_path / "example-tools"
         real_target.mkdir()
         # Slug encodes absolute path with dashes
-        slug_parts = str(tmp_path).lstrip("/").split("/") + ["techdocs-tools"]
+        slug_parts = str(tmp_path).lstrip("/").split("/") + ["example-tools"]
         slug = "-" + "-".join(p for part in slug_parts for p in part.split("-"))
         slug_dir = projects_dir / slug
         slug_dir.mkdir(parents=True)
@@ -560,7 +560,7 @@ class TestProjectFromSessionPath:
 
         result = _project_from_session_path(session_file)
         # Should resolve to the real target
-        assert result.endswith("techdocs-tools")
+        assert result.endswith("example-tools")
 
 
 # ---------------------------------------------------------------------------
@@ -666,7 +666,7 @@ class TestProjectFilter:
             "cc:a": {"source": "cc", "ts": "2026-04-10T10:00:00", "cost": 1.0,
                      "tokensIn": 100, "tokensOut": 50, "cacheWrites": 0,
                      "cacheReads": 0, "cacheSavings": 0.0,
-                     "project": "~/src/techdocs-tools"},
+                     "project": "~/src/example-tools"},
             "cc:b": {"source": "cc", "ts": "2026-04-15T10:00:00", "cost": 2.0,
                      "tokensIn": 200, "tokensOut": 100, "cacheWrites": 0,
                      "cacheReads": 0, "cacheSavings": 0.0,
@@ -674,12 +674,12 @@ class TestProjectFilter:
         }
 
     def test_matches_substring(self):
-        daily = aggregate_by_day(self._make_ledger(), project_filter="techdocs")
+        daily = aggregate_by_day(self._make_ledger(), project_filter="example")
         assert "2026-04-10" in daily
         assert "2026-04-15" not in daily
 
     def test_case_insensitive(self):
-        daily = aggregate_by_day(self._make_ledger(), project_filter="TECHDOCS")
+        daily = aggregate_by_day(self._make_ledger(), project_filter="EXAMPLE")
         assert "2026-04-10" in daily
 
     def test_no_match(self):
