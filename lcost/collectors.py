@@ -14,7 +14,7 @@ from .formatters import (
     FIELD_COST, FIELD_TOKENS_IN, FIELD_TOKENS_OUT,
 )
 from .ingest_state import file_needs_processing, get_stored_user_text, update_file_state
-from .pricing import calculate_cache_savings, calculate_cost
+from .pricing import calculate_cache_savings, calculate_cost, estimate_entry
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +239,8 @@ def extract_cline_entries(messages: List[Dict], task_dir_name: str,
 
             # --- model ---
             model_info = msg.get('modelInfo') or {}
-            model = _normalize_cline_model(model_info.get('modelId'))
+            raw_model = model_info.get('modelId')
+            model = _normalize_cline_model(raw_model)
 
             # --- prompt preview (from the `request` blob on this api_req) ---
             preview = _extract_cline_prompt_preview(text_data.get('request') or '')
@@ -269,6 +270,19 @@ def extract_cline_entries(messages: List[Dict], task_dir_name: str,
             }
             if model:
                 entry['model'] = model
+                entry['rawModel'] = raw_model
+            provider = model_info.get('providerId')
+            if isinstance(provider, str):
+                entry['modelProvider'] = provider
+            for source_key, target_key in (
+                ('serviceTier', 'serviceTier'), ('inferenceRoute', 'inferenceRoute'),
+            ):
+                value = model_info.get(source_key)
+                if isinstance(value, str):
+                    entry[target_key] = value
+            estimate = estimate_entry(entry)
+            if estimate is not None:
+                entry[FIELD_CACHE_SAVINGS] = estimate[FIELD_CACHE_SAVINGS]
             if project:
                 entry['project'] = project
             if preview:
@@ -743,5 +757,4 @@ def collect_claude_code_data(verbose: bool,
                   f"(expected for resumed sessions)")
 
     return all_entries
-
 

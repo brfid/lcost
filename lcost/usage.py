@@ -15,7 +15,7 @@ from .formatters import (
     FIELD_COST,
     TOKEN_FIELDS,
 )
-from .pricing import pricing_reference_for_model
+from .pricing import quote_for_entry, quote_metadata
 
 
 COST_PROVENANCE_RATE_CARD = "rate_card_estimate"
@@ -38,6 +38,16 @@ class UsageEntry(TypedDict, total=False):
     cacheSavings: Optional[float]
     costProvenance: str
     pricingRef: str
+    rawModel: str
+    modelProvider: str
+    inferenceRoute: str
+    serviceTier: str
+    pricingSource: str
+    pricingVerifiedAt: str
+    pricingRoute: str
+    pricingTier: str
+    pricingContext: str
+    pricingAssumptions: list
 
 
 _MONEY_FIELDS = (FIELD_COST, FIELD_CACHE_SAVINGS)
@@ -67,12 +77,9 @@ def normalize_usage_entry(entry: Mapping[str, object]) -> Dict[str, object]:
         normalized.setdefault("pricingRef", "cline:source-reported")
     elif source_name in ("cc", "codex"):
         normalized.setdefault("costProvenance", COST_PROVENANCE_RATE_CARD)
-        model = normalized.get("model")
-        pricing_ref = pricing_reference_for_model(
-            model if isinstance(model, str) else None
-        )
-        if pricing_ref is not None:
-            normalized.setdefault("pricingRef", pricing_ref)
+        quote = quote_for_entry(normalized)
+        if quote is not None and "pricingRef" not in normalized:
+            normalized.update(quote_metadata(quote))
     return normalized
 
 

@@ -361,10 +361,16 @@ class CostTrackerApp(App):
         if filter_text:
             hint = f"{dot}{filter_text}" + hint
         status = self.query_one("#bottom-status", Static)
+        unpriced = sum(day.get("unpricedRequests", 0) for day in self._daily.values())
+        unpriced_tokens = sum(day.get("unpricedTokens", 0) for day in self._daily.values())
+        partial = (
+            f"[#FF9900]PARTIAL PRICE · {unpriced:,} unpriced · "
+            f"{format_tokens(unpriced_tokens)}[/]{dot}" if unpriced else ""
+        )
         status.update(
             f"  [#FF9900]{entry_count:,}[/] entries{dot}"
             f"[#FF9900]{day_count}[/] days{dot}"
-            f"{refresh_icon} {self.REFRESH_INTERVAL}s{new_badge}{hint}  ",
+            f"{partial}{refresh_icon} {self.REFRESH_INTERVAL}s{new_badge}{hint}  ",
         )
 
     # Views with a selectable/scrollable call log (board + fullscreen LOG).
@@ -801,7 +807,11 @@ class CostTrackerApp(App):
             self._build_hud_kpi_cell(
                 f"TODAY · {unit}", "",
                 value_selector=lambda s: fmt(periods(s).today),
-                detail_selector=lambda s: f"{overview(s).today_requests:,} req",
+                detail_selector=lambda s: (
+                    f"{overview(s).today_requests:,} req"
+                    + (f" · partial: {overview(s).today_unpriced_requests:,} unpriced"
+                       if overview(s).today_unpriced_requests and not token_mode else "")
+                ),
                 spark_selector=lambda s: periods(s).spark_7d,
             ),
             self._build_hud_kpi_cell(
@@ -813,7 +823,11 @@ class CostTrackerApp(App):
             self._build_hud_kpi_cell(
                 "30-DAY", "accent",
                 value_selector=lambda s: fmt(periods(s).month),
-                detail_selector=lambda s: f"{format_number(overview(s).month_requests)} req",
+                detail_selector=lambda s: (
+                    f"{format_number(overview(s).month_requests)} req"
+                    + (f" · partial: {overview(s).month_unpriced_requests:,} unpriced"
+                       if overview(s).month_unpriced_requests and not token_mode else "")
+                ),
                 spark_selector=lambda s: periods(s).spark_30d,
             ),
             self._build_hud_kpi_cell(
@@ -1712,6 +1726,8 @@ class CostTrackerApp(App):
                 f" · write {token(entry.get(FIELD_CACHE_WRITES))}"
             ),
         ]
+        for assumption in entry.get("pricingAssumptions") or []:
+            lines.append(f"[#FF9900]ASSUMPTION[/] {self._esc_markup(str(assumption))}")
         if reasoning is not None:
             lines.append(f"[#9999CC]REASONING[/] {token(reasoning)} [dim](included in output)[/]")
         if spec.spawn_cost > 0:

@@ -18,6 +18,37 @@ def labels(widget):
     return " ".join(text(label) for label in widget.query(Label))
 
 
+def test_unpriced_usage_and_estimate_assumptions_are_visible(
+    tmp_path, dashboard_clock, dashboard_ledger,
+):
+    async def scenario():
+        path = tmp_path / "ledger.json"
+        entry = dashboard_ledger["codex:cached"]
+        entry.update({
+            "model": "openai.gpt-6.1-sol", "cost": None,
+            "pricingAssumptions": ["Bedrock route not recorded; assumed regional."],
+        })
+        save_ledger(path, dashboard_ledger)
+        app = CostTrackerApp(ledger_path_override=str(path), no_ingest=True)
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            assert "PARTIAL PRICE" in text(app.query_one("#bottom-status"))
+            assert "1 unpriced" in text(app.query_one("#bottom-status"))
+            assert "partial: 1 unpriced" in labels(app.query_one("#hud-kpi-strip"))
+            detail = text(app.query_one("#query-detail-content"))
+            assert "gpt-6.1-sol" in detail and "ASSUMPTION" in detail
+            assert "assumed regional" in detail
+            assert app._snapshot.overview.month_unpriced_tokens == 10_000
+            await pilot.press("enter")
+            full_detail = text(app.screen.query_one("#entry-detail-body"))
+            assert "Pricing:" in full_detail and "assumed regional" in full_detail
+            await pilot.press("escape")
+            await pilot.press("m")
+            await pilot.pause()
+            assert "PARTIAL PRICE" in text(app.query_one("#bottom-status"))
+    asyncio.run(scenario())
+
+
 def test_units_switch_the_whole_board_and_preserve_selection(
     tmp_path, dashboard_clock, dashboard_ledger,
 ):

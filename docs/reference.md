@@ -96,7 +96,9 @@ part of output and are not counted again. Unknown values remain explicit
 in stored records; summaries add only observed values.
 
 For Claude Code and Codex, lcost applies its configured rates to those token
-buckets. Cline costs are preserved from the source during ingestion. Rates
+buckets. Cline costs are preserved from the source during ingestion. Reports
+and the dashboard identify unpriced requests and tokens and mark monetary
+totals as partial when costs are unknown. Rates
 are in USD per million tokens; [pricing.py](../lcost/pricing.py) owns the model
 families, rates, and their references. Keep rate changes there and update
 `RATE_CARD_VERSION` so new estimates retain an identifiable rate card.
@@ -107,6 +109,48 @@ price. An entirely unrecognized model currently falls back to the default
 Sonnet rates; inspect the configured matching rules before relying on an
 estimate for a new model.
 
+### GPT models on Amazon Bedrock
+
+The configured GPT-6 models are `gpt-6-luna`, `gpt-6-sol`, `gpt-6-astra`,
+and `gpt-6.1-sol`. Bare IDs, provider-prefixed IDs, and `us.openai.` or
+`global.openai.` inference IDs retain distinct model labels. Unknown GPT-6
+versions remain unpriced.
+
+These Standard prices are USD per million tokens for requests with at most
+272,000 input tokens, verified against AWS model cards on October 6, 2026.
+Mantle and US geographic inference already include the 10% premium:
+
+| Model | Mantle/US input | Cache write | Cache read | Output |
+| --- | ---: | ---: | ---: | ---: |
+| GPT-6 Luna | $0.11 | $0.1375 | $0.011 | $0.55 |
+| GPT-6 Sol | $2.20 | $2.75 | $0.22 | $11.00 |
+| GPT-6 Astra | $11.00 | $13.75 | $1.10 | $55.00 |
+| GPT-6.1 Sol | $2.20 | $2.75 | $0.11 | $11.00 |
+
+Global inference uses base rates without the premium. For requests exceeding
+272,000 total input tokens, including cached input, all input and cache rates
+double and the output rate increases by 50%. These rates apply to the whole
+request. GPT-6 Astra Ultrafast costs six times the corresponding Standard
+rate; an unsupported recorded service tier remains unpriced.
+
+The same routing and context rules apply to new Bedrock GPT-5.6 estimates.
+Previously stored prices remain pinned until explicit recalculation.
+
+Codex retains provider, raw model ID, and any recorded service tier or route.
+Cline retains its raw ID and provider before normalizing the display model.
+When a Bedrock route is absent, lcost assumes Mantle/US pricing, which have
+the same rates. An absent service tier defaults to Standard. Both assumptions
+are recorded and shown in query details. lcost does not use today's provider
+configuration to reconstruct historical routes.
+
+Estimates retain the rate-card date, AWS source, route, service tier, context
+tier, and assumptions. Rate lookup is local and needs no AWS credentials.
+The primary sources are the AWS model cards for
+[GPT-6 Luna](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html),
+[GPT-6 Sol](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html),
+[GPT-6 Astra](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html),
+and [GPT-6.1 Sol](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html).
+
 ### Recalculate stored costs
 
 Preview recalculation before applying a rate change:
@@ -116,11 +160,31 @@ lcost --recalc --dry-run
 lcost --recalc
 ```
 
-Recalculation applies the current configured rates to eligible ledger entries,
-including Cline entries that originally used provider-reported costs. Changed
-entries are marked as rate-card estimates. Entries lacking a model, complete
-token counts, or configured rates retain their stored costs. The command
-reports old and new totals, changes, and skipped entries.
+Recalculation applies current rates to selected eligible entries. Source,
+project, and explicit date filters are honored. `--model MODEL` selects an
+exact model after provider-prefix normalization; repeat it for several models.
+`--provider PROVIDER` selects the recorded provider. `--only-unpriced` fills
+unknown costs while retaining already priced entries. For example:
+
+```bash
+lcost --recalc --dry-run --source codex --provider amazon-bedrock \
+  --model gpt-6.1-sol --only-unpriced --assume-bedrock-route regional
+```
+
+`--assume-bedrock-route regional|us|global` supplies a documented assumption
+only when the Bedrock route is absent. It cannot replace a recorded route.
+Remove `--dry-run` to apply the reviewed selection. No rescan is required
+solely to price complete usage already in the ledger.
+
+Source-reported costs, including legacy Cline costs, are preserved by default.
+`--include-source-reported` explicitly permits replacing them. Changed entries
+are marked as rate-card estimates. Entries lacking a model, complete token
+counts, or supported pricing retain their stored costs. The preview reports
+selected totals, affected models, pricing references, and assumptions.
+
+Stop the dashboard before applying recalculation; the writer shares its
+process lock. Dry runs do not write a ledger, backup, or lock. Applied changes
+preserve the prior ledger in `backups/recalc-TIMESTAMP.json` before saving.
 
 ## Module responsibilities
 

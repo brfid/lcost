@@ -119,7 +119,9 @@ board hides charts or the query inspector to leave room for the call log.
 Cline supplies per-query costs in its session records. Claude Code and
 Codex costs are estimates calculated from token counts and configured model
 rates. These estimates do not allocate subscription fees or reproduce an
-account invoice. See [tokens and pricing](docs/reference.md#tokens-and-pricing)
+account invoice. GPT-6 Bedrock estimates account for inference routing,
+prompt caching, long context, and recorded service tiers. Unpriced usage
+marks monetary totals as partial. See [tokens and pricing](docs/reference.md#tokens-and-pricing)
 for the accounting rules and rate sources.
 
 The ledger retains ingested usage after source sessions are deleted. Repeated
