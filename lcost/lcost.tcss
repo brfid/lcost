@@ -380,7 +380,7 @@ Sparkline > .sparkline--min-color {
 
 /* Top KPI strip: label · value · detail · sparkline */
 #hud-kpi-strip {
-    height: 6;
+    height: 7;
     width: 100%;
     layout: horizontal;
     margin: 0;
@@ -389,7 +389,7 @@ Sparkline > .sparkline--min-color {
 
 .hud-kpi-cell {
     width: 1fr;
-    height: 6;
+    height: 7;
     padding: 0 0 0 1;
     background: #0a0a0a;
     border-left: outer #CC6699;
@@ -403,21 +403,9 @@ Sparkline > .sparkline--min-color {
     padding-left: 2;
 }
 
-#hud-source-strip {
-    height: 1;
-    width: 100%;
-    padding: 0 1;
-    color: #CC9966;
-    background: #11161E;
-    border-left: outer #FF9900;
-    text-wrap: nowrap;
-    text-overflow: ellipsis;
-}
-
-
 .hud-kpi-spark {
     width: 100%;
-    height: 2;
+    height: 3;
     margin: 0 1 0 0;
 }
 
@@ -434,20 +422,29 @@ Sparkline > .sparkline--min-color {
 }
 
 .hud-kpi-label {
+    width: 100%;
     height: 1;
     color: #9999CC;
     text-style: bold;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
 }
 
 .hud-kpi-value {
+    width: 100%;
     height: 1;
     color: #FF9900;
     text-style: bold;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
 }
 
 .hud-kpi-detail {
+    width: 100%;
     height: 1;
     color: #CC9966;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
 }
 
 /* Middle tier: two rows per weekday, one hour-axis row and two borders.
@@ -552,6 +549,14 @@ Sparkline > .sparkline--min-color {
 
 .hud-compact #hud-kpi-strip {
     height: 3;
+}
+
+.hud-compact .hud-kpi-cell {
+    height: 3;
+}
+
+.hud-compact .hud-kpi-spark {
+    display: none;
 }
 
 /* ── Entry detail modal ── */

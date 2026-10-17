@@ -66,7 +66,7 @@ The board puts period summaries beside recent activity:
 | Panel | Contents |
 | --- | --- |
 | Summary strip | Today, week to date, 30 days, token usage, cache efficiency, and daily/hourly usage rates |
-| Daily trend | Usage over 30 calendar days by default, including idle days |
+| Trend | Daily usage over 30 calendar days by default, or hourly usage by model over the last 24 hours |
 | Heatmap | Usage by hour and weekday; the hour range fits the selected data, retaining gaps between active hours |
 | Hourly activity | Today's usage across the full 24 hours |
 | Rankings | Today's leading projects, model mix, and stop reasons |
@@ -82,8 +82,17 @@ activity, it shows the full day. The `h` key changes the hourly bar's metric
 independently; the next board unit change brings it back into the board's
 units.
 
-The source strip shows today's usage and the age of each source's last
-successful scan. The dashboard refreshes every 30 seconds. New queries have
+Press `t` on the board or in the expanded trend to switch between daily
+usage and a line for each model used in the rolling last 24 hours. The model
+view uses the board's price or total-token setting; `m` changes that setting
+in either the board or the expanded model view. Its clock hours include
+partial hours at the edges; zero-usage hours leave gaps in the lines. Source, project,
+and date filters apply to this view too.
+Models contributing less than 1% of the selected unit's 24-hour total are
+hidden from the chart and legend; the total still includes them. Lines and
+legend entries follow descending usage, with distinct colors for the top four.
+
+The dashboard refreshes every 30 seconds. New queries have
 a `★` marker, and subagent calls have `↳`. The status bar shows the current
 filters, units, entry count, and refresh state. In smaller terminals, the
 board hides charts or the query inspector to leave room for the call log.
@@ -92,7 +101,7 @@ board hides charts or the query inspector to leave room for the call log.
 
 | Key | Panel | Metric control |
 | --- | --- | --- |
-| `1` | TREND | `m` cycles price, input/output tokens, cache tokens, and savings |
+| `1` | TREND | Expands the active trend view; `t` switches daily / models. Daily: `m` cycles price, input/output tokens, cache tokens, and savings. Models: `m` switches overall price / total tokens |
 | `2` | HEATMAP | `m` cycles price, requests, and tokens |
 | `3` | LOG | Uses the board's selected units |
 | `4` | CALLS | Per-query price distribution |
@@ -102,6 +111,7 @@ board hides charts or the query inspector to leave room for the call log.
 | Key | Action |
 | --- | --- |
 | `m` | Switch board units or cycle the expanded panel's metric, as listed above |
+| `t` | Switch the trend between daily usage and models in the last 24 hours |
 | `h` | Cycle the board's hourly bar through price, tokens, and requests |
 | `0` | Return to the board |
 | `Esc` | Close an open detail or help view, or return to the board |

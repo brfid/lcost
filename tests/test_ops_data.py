@@ -1,7 +1,9 @@
 """Tests for pure ops_data helpers."""
 
 from datetime import datetime, timedelta
+import time
 
+import pytest
 
 from lcost.ops_data import (
     TOOL_ABBREV,
@@ -9,6 +11,7 @@ from lcost.ops_data import (
     collect_entries,
     cost_bar,
     hour_week_grid,
+    hourly_by_model,
     hourly_cost_today,
     model_color,
     percentile,
@@ -142,6 +145,108 @@ class TestHourlyCostToday:
 
 
 class TestBoardReductions:
+    def test_model_hours_cover_exact_rolling_window_and_keep_idle_hours(self):
+        now = datetime(2026, 9, 12, 12, 30)
+        start = now - timedelta(hours=24)
+
+        def entry(dt, model="model-a", **fields):
+            return {
+                "source": "cline", "ts": dt.isoformat(),
+                "model": model, "cost": 1, **fields,
+            }
+
+        ledger = {
+            "start": entry(start),
+            "same-hour": entry(start + timedelta(minutes=15), cost=2),
+            "overnight": entry(now - timedelta(hours=13), model="model-b", cost=4),
+            "subagent": entry(now, model="model-b", isSubagent=True, cost=8),
+            "too-old": entry(start - timedelta(microseconds=1), cost=100),
+            "future": entry(now + timedelta(microseconds=1), cost=100),
+            "spawn": entry(now, source="agent_spawn", cost=100),
+            "cline:historical:summary": entry(now, cost=100),
+            "bad-time": {"source": "cline", "ts": "bad", "cost": 100},
+        }
+        hours, series = hourly_by_model(ledger, "cost", now)
+        assert len(hours) == 25
+        assert hours[0] == start.replace(minute=0)
+        assert hours[-1] == now.replace(minute=0)
+        assert set(series) == {"model-a", "model-b"}
+        assert series["model-a"][0] == 3
+        assert sum(series["model-a"]) == 3
+        assert series["model-b"][11] == 4
+        assert series["model-b"][-1] == 8
+        assert series["model-b"][12:24] == [0] * 12
+
+    def test_model_hours_count_cache_once_and_keep_unpriced_unknown_models(self):
+        now = datetime(2026, 9, 12, 12, 30)
+        ledger = {
+            "unpriced": {
+                "source": "codex", "ts": now.isoformat(), "model": "mystery-one",
+                "cost": None, "tokensIn": 10, "tokensOut": 20,
+                "cacheReads": 30, "cacheWrites": 40, "reasoningTokens": 15,
+            },
+            "same-short-name": {
+                "source": "cline", "ts": now.isoformat(), "model": "mystery-two",
+                "cost": 2, "tokensIn": None, "tokensOut": 5,
+            },
+            "missing-model": {
+                "source": "cline", "ts": now.isoformat(), "cost": 3,
+                "tokensIn": 7,
+            },
+        }
+        _, tokens = hourly_by_model(ledger, "tokens", now)
+        assert {model: sum(values) for model, values in tokens.items()} == {
+            "mystery-one": 100, "mystery-two": 5, "unknown": 7,
+        }
+        _, costs = hourly_by_model(ledger, "cost", now)
+        assert {model: sum(values) for model, values in costs.items()} == {
+            "mystery-one": 0, "mystery-two": 2, "unknown": 3,
+        }
+
+    def test_model_hours_convert_offset_timestamps_and_handle_empty_data(self):
+        from datetime import timezone
+
+        now = datetime(2026, 9, 12, 12, 30, tzinfo=timezone.utc)
+        ledger = {
+            "offset": {
+                "source": "codex", "ts": "2026-09-12T14:30:00+02:00",
+                "model": "model", "cost": 2,
+            },
+        }
+        _, series = hourly_by_model(ledger, "cost", now)
+        assert series["model"][-1] == 2
+        assert sum(series["model"]) == 2
+        hours, series = hourly_by_model({}, "cost", now)
+        assert len(hours) == 25 and series == {}
+
+    @pytest.mark.skipif(not hasattr(time, "tzset"), reason="Requires local timezone control")
+    def test_model_hours_keep_both_repeated_dst_hours(self, monkeypatch):
+        from datetime import timezone
+
+        try:
+            with monkeypatch.context() as patch:
+                patch.setenv("TZ", "America/Los_Angeles")
+                time.tzset()
+                now = datetime(2026, 11, 1, 10, 15, tzinfo=timezone.utc)
+                ledger = {
+                    str(i): {
+                        "source": "codex", "model": "model",
+                        "ts": ts, "cost": cost,
+                    }
+                    for i, (ts, cost) in enumerate([
+                        ("2026-11-01T08:30:00+00:00", 3),
+                        ("2026-11-01T09:30:00+00:00", 5),
+                        ("2026-10-31T10:14:00+00:00", 100),
+                    ])
+                }
+                hours, series = hourly_by_model(ledger, "cost", now)
+                assert hours[-3].hour == hours[-2].hour == 1
+                assert (hours[-3].fold, hours[-2].fold) == (0, 1)
+                assert series["model"][-3:] == [3, 5, 0]
+                assert sum(series["model"]) == 8
+        finally:
+            time.tzset()
+
     def test_hour_week_grid_tokens_uses_input_and_output(self):
         now = datetime.now().replace(hour=14, minute=0, second=0, microsecond=0)
         ledger = {

@@ -24,7 +24,8 @@ def entry_local_dt(entry: Dict) -> datetime:
     if dt.tzinfo is None and entry.get('source') in ('cc', 'agent_spawn'):
         dt = dt.replace(tzinfo=timezone.utc)
     if dt.tzinfo is not None:
-        dt = dt.astimezone().replace(tzinfo=None)
+        # Keep the fold flag so repeated DST hours retain their real instant.
+        dt = datetime.fromtimestamp(dt.timestamp())
     return dt
 
 

@@ -83,10 +83,14 @@ def test_demo_dashboard_runs_and_switches_units_without_source_data(monkeypatch,
             assert app._snapshot.overview.cost.today > 0
             await pilot.press("m")
             await pilot.pause()
-            assert "TOKENS" in str(app.query_one("#hud-source-strip").render())
-            assert "no scanning" in str(app.query_one("#hud-source-strip").render())
+            assert not app.query("#hud-source-strip")
+            assert "TOKENS" in str(app.query_one("#hud-trend").border_title)
             assert app._snapshot.overview.tokens.today > 0
             assert app._ops_row_specs
+            await pilot.press("t", "1")
+            await pilot.pause()
+            assert app._trend_view == "models" and app._current_tab == "TREND"
+            await pilot.press("escape")
             await pilot.resize_terminal(170, 52)
             await pilot.pause()
             for bar in app.query(FluidBar):
