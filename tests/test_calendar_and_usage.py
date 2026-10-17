@@ -9,7 +9,6 @@ from lcost.formatters import total_tokens
 from lcost.ingest_state import hours_since_last_ingest, timestamp_age
 from lcost.live_metrics import ClockBucket, compute_snapshot
 from lcost.ops_data import build_row_specs, collect_entries, hour_week_grid
-from lcost.tui import CostTrackerApp
 
 
 def test_calendar_periods_exclude_old_activity_and_include_idle_days(dashboard_clock):
@@ -59,7 +58,6 @@ def test_offset_timestamps_keep_their_instant_and_scan_ages_are_safe():
     for source in ("cc", "codex", "cline"):
         assert entry_local_dt({"source": source, "ts": "2026-09-12T14:00:00+02:00"}) == utc.astimezone().replace(tzinfo=None)
     assert timestamp_age("2026-09-12T13:00:00+02:00", utc) == 3600
-    assert CostTrackerApp._source_health_age("2026-09-12T13:00:00+02:00", utc) == "1.0h"
     assert hours_since_last_ingest({"last_ingest_at": utc.isoformat()}) is not None
     assert _format_age(utc.isoformat()) != "unknown"
 

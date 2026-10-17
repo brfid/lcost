@@ -87,6 +87,37 @@ def hour_week_grid(ledger: Dict, source_filter: Optional[str],
     return grid
 
 
+def hourly_by_model(ledger: Dict, metric: str,
+                    now: Optional[datetime] = None) -> Tuple[List[datetime], Dict[str, List[float]]]:
+    """Hourly model usage in the rolling last 24 hours, oldest hour first.
+
+    Keep separate recorded model IDs, including unknown models and unpriced
+    calls. The first and last clock hours may be partial; entries outside the
+    exact window, historical summaries and synthetic spawns are excluded.
+    """
+    now = now or datetime.now()
+    end = now.timestamp()
+    start = end - 24 * 3600
+    first_hour = datetime.fromtimestamp(start).replace(
+        minute=0, second=0, microsecond=0,
+    ).timestamp()
+    # Use instants so a DST transition still covers 24 elapsed hours.
+    hours = [datetime.fromtimestamp(first_hour + i * 3600) for i in range(25)]
+    series: Dict[str, List[float]] = {}
+    for dt, entry in iter_individual_entries(ledger):
+        instant = dt.timestamp()
+        if not start <= instant <= end:
+            continue
+        model = entry.get("model") or "unknown"
+        values = series.setdefault(model, [0.0] * len(hours))
+        index = int((instant - first_hour) // 3600)
+        values[index] += (
+            total_tokens(entry) if metric == "tokens"
+            else entry.get(FIELD_COST) or 0
+        )
+    return hours, dict(sorted(series.items()))
+
+
 def source_today(entries: Sequence[Tuple], source_names: Sequence[str],
                  now: Optional[datetime] = None) -> Tuple[SourceToday, ...]:
     """Return today's price/token totals in stable source order."""

@@ -370,12 +370,20 @@ class HelpScreen(ModalScreen):
             "BOARD",
             "  [b]1–4    [/b] Expand a panel fullscreen\n"
             "  [b]m      [/b] Switch all board price / total tokens\n"
+            "  [b]t      [/b] Switch trend: daily / models in last 24h\n"
             "  [b]h      [/b] Cycle hourly bar (cost / tokens / requests)\n"
             "  [b]j / k  [/b] Move call-log selection · [b]enter[/b] detail",
         ),
         "TREND": (
             "TREND (fullscreen)",
             "  [b]m      [/b] Cycle cost / tokens-io / tokens-cache / savings\n"
+            "  [b]t      [/b] Switch to models in the last 24h\n"
+            "  [b]esc/0  [/b] Back to board · [b]] [ [/b] next/prev panel",
+        ),
+        "TREND_MODELS": (
+            "MODEL TREND (fullscreen)",
+            "  [b]m      [/b] Switch overall price / total tokens\n"
+            "  [b]t      [/b] Switch to daily trend\n"
             "  [b]esc/0  [/b] Back to board · [b]] [ [/b] next/prev panel",
         ),
         "HEATMAP": (

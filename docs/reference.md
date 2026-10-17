@@ -41,8 +41,8 @@ They can recover only data still present in the source sessions.
 
 `lcost --stats` also reports ledger size, entry counts, date range, projects,
 and backups. `--verbose` adds discovery and scan diagnostics to text reports;
-`--quiet` suppresses their status messages. The dashboard reports scan state
-in its source strip.
+`--quiet` suppresses their status messages. Use `lcost --stats` to inspect
+each source's scan state.
 
 The dashboard holds a process lock while it runs. If another instance holds
 the lock, `--force` waits for it to exit before starting. Closing the process

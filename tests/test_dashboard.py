@@ -1,9 +1,11 @@
 """Keyboard-driven tests of the board, refreshes, filters and call inspection."""
 import asyncio
 from datetime import timedelta
+from itertools import combinations
 
 import pytest
 from textual.widgets import Label
+from textual_plotext import PlotextPlot
 
 from lcost.ledger import save_ledger
 from lcost.ops_widgets import EntryDetailScreen, FluidBar, HeatmapGrid, LiveSparkline, LogRow
@@ -34,7 +36,7 @@ def test_unpriced_usage_and_estimate_assumptions_are_visible(
             await pilot.pause()
             assert "PARTIAL PRICE" in text(app.query_one("#bottom-status"))
             assert "1 unpriced" in text(app.query_one("#bottom-status"))
-            assert "partial: 1 unpriced" in labels(app.query_one("#hud-kpi-strip"))
+            assert "unpriced" not in labels(app.query_one("#hud-kpi-strip"))
             detail = text(app.query_one("#query-detail-content"))
             assert "gpt-6.1-sol" in detail and "ASSUMPTION" in detail
             assert "assumed regional" in detail
@@ -58,8 +60,7 @@ def test_units_switch_the_whole_board_and_preserve_selection(
         app = CostTrackerApp(ledger_path_override=str(path), no_ingest=True)
         async with app.run_test(size=(160, 50)) as pilot:
             await pilot.pause()
-            strip = text(app.query_one("#hud-source-strip"))
-            assert all(source in strip for source in ("ALL SOURCES", "Codex", "Claude", "Cline"))
+            assert not app.query("#hud-source-strip")
             assert "$10" in labels(app.query_one("#hud-kpi-strip"))
             assert "PRICE" in str(app.query_one("#hud-trend").border_title)
             assert "expensive-project" in text(app.query_one("#hud-ranking Label"))
@@ -70,7 +71,6 @@ def test_units_switch_the_whole_board_and_preserve_selection(
             assert "10.1 KTok" in kpis
             assert "1.4 KTok/day" in kpis
             assert "$" not in kpis
-            assert "TOKENS" in text(app.query_one("#hud-source-strip"))
             assert "TOKENS" in str(app.query_one("#hud-trend").border_title)
             assert "TOKENS" in str(app.query_one("#hud-heatmap").border_title)
             assert "TOKENS" in str(app.query_one("#hud-hourly").border_title)
@@ -104,6 +104,203 @@ def test_units_switch_the_whole_board_and_preserve_selection(
             await pilot.press("m", "m", "m", "m")
             await pilot.pause()
             assert "$10" in labels(app.query_one("#hud-kpi-strip"))
+
+    asyncio.run(scenario())
+
+
+def test_model_trend_switches_in_place_uses_board_units_and_expands(
+    tmp_path, dashboard_clock, dashboard_ledger,
+):
+    async def scenario():
+        path = tmp_path / "ledger.json"
+        save_ledger(path, dashboard_ledger)
+        app = CostTrackerApp(ledger_path_override=str(path), no_ingest=True)
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.press("j", "j", "t")
+            await pilot.pause()
+            assert app._current_tab == "BOARD" and app._trend_view == "models"
+            assert "MODEL PRICE" in str(app.query_one("#hud-trend").border_title)
+            assert "$10" in str(app.query_one("#hud-trend").border_subtitle)
+            plot = app.query_one("#hud-trend PlotextPlot", PlotextPlot)
+            rendered = text(plot)
+            assert "sonnet-4.6" in rendered and "gpt-5.6-luna" in rendered
+            assert "12:00" in rendered
+            assert "expensive-project" in text(app.query_one("#query-detail-content"))
+            await pilot.press("m", "1")
+            await pilot.pause()
+            assert app._current_tab == "TREND"
+            assert "MODEL TOKENS" in labels(app.query_one("#panel-container"))
+            assert "10.1 KTok" in labels(app.query_one("#panel-container"))
+            await pilot.press("?")
+            assert "Switch overall price / total tokens" in text(app.screen.query_one("#help-body"))
+            await pilot.press("escape", "m", "escape")
+            await pilot.pause()
+            assert app._board_metric == "cost" and app._trend_view == "models"
+            assert "$10" in labels(app.query_one("#hud-kpi-strip"))
+            assert "expensive-project" in text(app.query_one("#query-detail-content"))
+
+            await pilot.press("1", "t", "m", "t")
+            await pilot.pause()
+            assert app._trend_metric == "tokens_io"
+            assert app._board_metric == "cost"
+            assert "MODEL PRICE" in labels(app.query_one("#panel-container"))
+            await pilot.press("t", "escape")
+            await pilot.pause()
+            assert "DAILY PRICE" in str(app.query_one("#hud-trend").border_title)
+            await pilot.press("2", "t")
+            assert app._trend_view == "daily"  # Other panels retain their controls.
+    asyncio.run(scenario())
+
+
+def test_model_trend_refresh_ages_calls_out_without_ledger_changes(
+    tmp_path, dashboard_clock, dashboard_ledger,
+):
+    async def scenario():
+        path = tmp_path / "ledger.json"
+        dashboard_ledger["old-model"] = dict(
+            dashboard_ledger["cline:expensive"], model="claude-opus-4-7",
+            ts=(dashboard_clock.now - timedelta(hours=23, minutes=59)).isoformat(),
+            cost=20,
+        )
+        save_ledger(path, dashboard_ledger)
+        app = CostTrackerApp(ledger_path_override=str(path), no_ingest=True)
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.press("t")
+            await pilot.pause()
+            assert "$30" in str(app.query_one("#hud-trend").border_subtitle)
+            revision = app._data_revision
+            dashboard_clock.now += timedelta(minutes=2)
+            app._auto_refresh_tick()
+            await pilot.pause()
+            assert app._data_revision == revision
+            assert "$10" in str(app.query_one("#hud-trend").border_subtitle)
+            assert "opus-4.7" not in text(app.query_one("#hud-trend PlotextPlot"))
+            await pilot.press("1")
+            dashboard_clock.now += timedelta(hours=24)
+            app._auto_refresh_tick()
+            await pilot.pause()
+            assert "No model usage in the last 24 hours" in labels(app.query_one("#panel-container"))
+            await pilot.press("escape")
+            await pilot.pause()
+            assert "MODEL PRICE" in str(app.query_one("#hud-trend").border_title)
+            assert "No model usage" in labels(app.query_one("#hud-trend"))
+    asyncio.run(scenario())
+
+
+def test_model_trend_hides_trivial_usage_and_distinguishes_leading_four(
+    tmp_path, dashboard_clock,
+):
+    async def scenario():
+        path = tmp_path / "ledger.json"
+        models = [
+            ("gpt-6.1-sol", 500, 8000),
+            ("gpt-6-luna", 250, 1400),
+            ("gpt-5.6-luna", 150, 400),
+            ("claude-sonnet-4-6", 80, 100),
+            ("edge", 10, 100),  # Exactly 1% in both units.
+            ("unknown", 6, 0),
+            ("tiny", 4, 0),
+            ("zero", 0, 0),
+            ("unpriced", None, 0),
+        ]
+        ledger = {
+            str(i): {
+                "source": "codex", "ts": dashboard_clock.now.isoformat(),
+                "model": model, "cost": cost, "tokensIn": tokens,
+            }
+            for i, (model, cost, tokens) in enumerate(models)
+        }
+        save_ledger(path, ledger)
+        app = CostTrackerApp(ledger_path_override=str(path), no_ingest=True)
+        names = ("gpt-6.1-sol", "gpt-6-luna", "gpt-5.6-luna", "sonnet-4.6")
+
+        def check_chart():
+            rendered = app.query_one(PlotextPlot).render()
+            assert all(name in rendered.plain for name in (*names, "edge"))
+            assert all(name not in rendered.plain for name in ("unknown", "tiny", "zero", "unpriced"))
+            offsets = [rendered.plain.index(name) for name in names]
+            assert offsets == sorted(offsets)
+            colors = [
+                rendered.get_style_at_offset(app.console, offset - 2).color.triplet
+                for offset in offsets
+            ]
+            assert len(set(colors)) == 4
+            assert all(
+                sum((a - b) ** 2 for a, b in zip(left, right)) > 150 ** 2
+                for left, right in combinations(colors, 2)
+            )
+            return colors
+
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.press("t")
+            await pilot.pause()
+            price_colors = check_chart()
+            assert app._snapshot.overview.cost.today == 1000  # Hidden models still count.
+            await pilot.press("1")
+            await pilot.pause()
+            assert check_chart() == price_colors
+            await pilot.press("m")
+            await pilot.pause()
+            assert check_chart() == price_colors
+            assert "10 KTok" in labels(app.query_one("#panel-container"))
+            await pilot.press("escape")
+            await pilot.pause()
+            assert check_chart() == price_colors
+
+            # Unknown is allowed back when its contribution becomes meaningful.
+            ledger["5"]["tokensIn"] = 10_000
+            save_ledger(path, ledger)
+            app._auto_refresh_tick()
+            await pilot.pause()
+            assert "unknown" in text(app.query_one(PlotextPlot))
+            assert app._snapshot.overview.tokens.today == 20_000
+
+    asyncio.run(scenario())
+
+
+def test_model_trend_leaves_zero_hours_blank_in_both_units_and_sizes(
+    tmp_path, dashboard_clock,
+):
+    async def scenario():
+        path = tmp_path / "ledger.json"
+        save_ledger(path, {
+            str(i): {
+                "source": "codex",
+                "ts": (dashboard_clock.now - timedelta(hours=age)).isoformat(),
+                "model": "gpt-6.1-sol", "cost": cost, "tokensIn": cost * 1000,
+            }
+            for i, (age, cost) in enumerate([(18, 2), (17, 4), (3, 3), (14, 0)])
+        })
+        app = CostTrackerApp(ledger_path_override=str(path), no_ingest=True)
+
+        def check_gaps():
+            rendered = app.query_one(PlotextPlot).render().plain
+            rows = rendered.splitlines()
+            top = next(i for i, row in enumerate(rows) if "┌" in row)
+            bottom = next(i for i, row in enumerate(rows) if "└" in row)
+            left, right = rows[top].index("┌"), rows[top].index("┐")
+            canvas = rows[top + 1:bottom]
+            zero_row = next(row for row in canvas if row[:left].strip() in ("$0.00", "0"))
+            assert "•" not in zero_row  # No colored baseline.
+            gap_column = left + 1 + (right - left - 2) // 2
+            assert all(row[gap_column] == " " for row in canvas)  # No bridge across idle hours.
+            assert rendered.count("gpt-6.1-sol") == 1
+            assert rendered.count("•") > 4  # Active hours still render.
+            assert "12:00" in rendered  # Keep the full time axis.
+
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.press("t")
+            await pilot.pause()
+            check_gaps()
+            await pilot.press("1")
+            await pilot.pause()
+            check_gaps()
+            await pilot.press("m")
+            await pilot.pause()
+            check_gaps()
+            await pilot.press("escape")
+            await pilot.pause()
+            check_gaps()
 
     asyncio.run(scenario())
 
@@ -165,6 +362,10 @@ def test_compact_board_switches_units_and_hides_inspector(
             assert app.query_one("#hud-log-table").display
             assert not app.query_one("#hud-log-detail").display
             assert "10.1 KTok" in labels(app.query_one("#hud-kpi-strip"))
+            await pilot.press("t", "1")
+            await pilot.pause()
+            assert "MODEL TOKENS" in labels(app.query_one("#panel-container"))
+            await pilot.press("escape")
             await pilot.press("3", "j", "enter")
             assert isinstance(app.screen, EntryDetailScreen)
     asyncio.run(scenario())
@@ -186,8 +387,12 @@ def test_filters_apply_to_every_view_and_empty_ledger_is_usable(
             assert len(heatmap._grid[0]) == 1
             assert heatmap._x_labels == [(0, "12")]
             assert len(app.query(LogRow)) == 1
-            assert "$1" in text(app.query_one("#hud-source-strip"))
+            assert "$1" in labels(app.query_one("#hud-kpi-strip"))
             assert sum(map(sum, app._get_hm_grid("cost"))) == 1
+            await pilot.press("t")
+            await pilot.pause()
+            assert "$1" in str(app.query_one("#hud-trend").border_subtitle)
+            assert "sonnet-4.6" not in text(app.query_one("#hud-trend PlotextPlot"))
             await pilot.press("enter")
             assert "[not-a-tag]" in text(app.screen.query_one("#entry-detail-body"))
             await pilot.press("escape")
