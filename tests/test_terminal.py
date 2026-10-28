@@ -1,5 +1,6 @@
 """Output-level checks for Apple Terminal startup compatibility."""
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -77,12 +78,15 @@ def test_apple_terminal_app_keeps_original_display_methods(monkeypatch):
 
     monkeypatch.setenv("TERM_PROGRAM", "Apple_Terminal")
     app_class = terminal.compatible_app_class(CostTrackerApp)
-    app = app_class(demo=True)
 
-    assert resize_query_output(app.get_driver_class()) == ""
-    assert app_class.compose is CostTrackerApp.compose
-    assert app_class.on_mount is CostTrackerApp.on_mount
-    assert app_class._render_board is CostTrackerApp._render_board
+    async def scenario():
+        app = app_class(demo=True)
+        assert resize_query_output(app.get_driver_class()) == ""
+        assert app_class.compose is CostTrackerApp.compose
+        assert app_class.on_mount is CostTrackerApp.on_mount
+        assert app_class._render_board is CostTrackerApp._render_board
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("term_program", ["ghostty", "iTerm.app", "vscode", None])

@@ -1,4 +1,5 @@
 """Exercise command-line contracts through the public entry point."""
+import asyncio
 from contextlib import nullcontext
 from datetime import datetime, timedelta
 import os
@@ -145,7 +146,11 @@ def test_dashboard_color_mode_and_environment_restoration(original, mode, monkey
 
     monkeypatch.setattr(CostTrackerApp, "run", inspect_dashboard)
     monkeypatch.setattr("sys.argv", ["lcost", "--demo", "--color", mode])
-    assert main() == 0
+
+    async def scenario():
+        assert main() == 0
+
+    asyncio.run(scenario())
     expected_monochrome = mode == "never" or (mode == "auto" and original is not None)
     assert observed == [expected_monochrome]
     foreground, background = palette[0]
