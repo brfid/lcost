@@ -1,0 +1,5 @@
+include LICENSE README.md .gitignore .gitlab-ci.yml
+include .github/workflows/guard.yml
+include scripts/pre-commit scripts/install-hooks.sh
+recursive-include docs *.md *.png
+recursive-include tests *.py

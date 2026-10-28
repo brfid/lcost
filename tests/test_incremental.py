@@ -331,23 +331,18 @@ class TestModelPricing:
         # Sonnet 4.5 is exactly registered
         assert get_model_pricing("claude-sonnet-4-5-20250929") is SONNET_PRICING
 
-    def test_family_fallback_opus(self):
-        # Unknown opus variant should still resolve to opus pricing
-        assert get_model_pricing("claude-opus-99-99") is OPUS_PRICING
+    def test_unknown_opus_version_is_unpriced(self):
+        assert get_model_pricing("claude-opus-99-99") is None
 
-    def test_family_fallback_haiku(self):
-        assert get_model_pricing("claude-haiku-future") is HAIKU_PRICING
+    def test_unknown_haiku_version_is_unpriced(self):
+        assert get_model_pricing("claude-haiku-future") is None
 
-    def test_unknown_falls_back_to_default(self):
-        # A string with no recognizable family falls back to DEFAULT (Sonnet).
-        # Recognized-but-unpriced families (gpt-4, nova, llama) return None
-        # under the new None-as-unpriced semantics — exercised in
-        # test_multi_model.
+    def test_unknown_model_is_unpriced(self):
         result = get_model_pricing("completely-made-up-model-name")
-        assert result is SONNET_PRICING  # current DEFAULT
+        assert result is None
 
     def test_none_model(self):
-        assert get_model_pricing(None) is SONNET_PRICING
+        assert get_model_pricing(None) is None
 
     def test_infer_by_family_direct(self):
         assert family_for_model("anything-opus-inside").pricing is OPUS_PRICING

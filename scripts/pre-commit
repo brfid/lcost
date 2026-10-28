@@ -1,7 +1,7 @@
 #!/bin/sh
 # Check staged paths before committing; --all checks tracked paths in CI.
 set -eu
-forbidden_patterns='(^|/)(ledger|ingest_state)([.-][^/]*)?\.json$'
+forbidden_patterns='(^|/)((ledger|ingest_state)([.-][^/]*)?|recalc-[^/]+)\.json$'
 
 if [ "${1:-}" = "--all" ]; then
     paths=$(git ls-files)

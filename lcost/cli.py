@@ -385,10 +385,24 @@ def main():
             return 1
         return 0
 
-    added = 0 if args.demo else run_ingest(ledger_path, ledger, source=args.source,
-                       no_ingest=args.cached, force_ingest=args.rescan,
-                       verbose=args.verbose, quiet=args.quiet,
-                       max_gap_hours=args.max_gap_hours, deep=args.deep)
+    from .pidfile import AlreadyRunning, single_instance
+
+    try:
+        with (nullcontext() if args.demo or args.cached
+              else single_instance(force=args.force)):
+            if not args.demo and not args.cached:
+                # Reports ingest too; reload only after acquiring the writer lock.
+                ledger = load_ledger(ledger_path)
+            added = 0 if args.demo else run_ingest(
+                ledger_path, ledger, source=args.source,
+                no_ingest=args.cached, force_ingest=args.rescan,
+                verbose=args.verbose, quiet=args.quiet,
+                max_gap_hours=args.max_gap_hours, deep=args.deep,
+            )
+    except AlreadyRunning as exc:
+        print(str(exc))
+        print("Use --report --cached to read stored usage while another instance runs.")
+        return 1
     if added > 0 and not args.quiet:
         print(f"Ledger: {added} new entries ({len(ledger)} total)")
 

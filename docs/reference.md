@@ -44,9 +44,10 @@ and backups. `--verbose` adds discovery and scan diagnostics to text reports;
 `--quiet` suppresses their status messages. Use `lcost --stats` to inspect
 each source's scan state.
 
-The dashboard holds a process lock while it runs. If another instance holds
-the lock, `--force` waits for it to exit before starting. Closing the process
-releases the lock.
+The dashboard, ingesting reports, and recalculation share a process lock.
+If another instance holds the lock, `--force` waits for it to exit before
+starting. Use `--report --cached` to read stored usage while the dashboard runs.
+Closing the process releases the lock.
 
 ## Stored data
 
@@ -73,9 +74,11 @@ precedence. Use the `lcost` command after upgrading.
 
 ### Source records
 
-Claude Code entries can include a prompt preview, tools, stop reason, project,
-session, and subagent marker alongside their usage values. Cline supplies
-per-request records, including provider-reported costs. Its provider-prefixed
+Claude Code entries can include an 80-character prompt preview, tool names,
+stop reason, project, session, and subagent marker alongside their usage values.
+Its scan state retains only the same bounded prompt preview for incremental
+parsing. Cline supplies per-request records, including provider-reported costs.
+Its provider-prefixed
 model IDs are normalized for model-family matching.
 
 Codex reads rollout logs under `$CODEX_HOME/sessions` and
@@ -103,25 +106,58 @@ are in USD per million tokens; [pricing.py](../lcost/pricing.py) owns the model
 families, rates, and their references. Keep rate changes there and update
 `RATE_CARD_VERSION` so new estimates retain an identifiable rate card.
 
-Model families match normalized model IDs, with more specific matches taking
-precedence. A recognized family without configured rates has no calculated
-price. An entirely unrecognized model currently falls back to the default
-Sonnet rates; inspect the configured matching rules before relying on an
-estimate for a new model.
+Model families identify display labels and colors. Prices require a configured
+model/version; unknown models, missing model IDs, and unverified releases remain
+unpriced. Gemma and Gemini are separate families. Nova, Gemma, Gemini, Llama,
+Mistral, and GPT-OSS have no configured estimates; source-reported Cline costs
+for these models are still retained. Their region, tier, and cache prices must
+be verified before enabling estimates.
+
+### Claude models on Amazon Bedrock
+
+Standard Global rates below are USD per million tokens, checked against the
+[AWS pricing tables](https://aws.amazon.com/bedrock/pricing/) on October 28, 2026.
+Supported US geographic and regional estimates include a 10% premium on every
+bucket. The older Opus 4.5, Sonnet 4.5, and Haiku 4.5 rates remain configured.
+
+| Model | Global input | Cache write, 5m | Cache write, 1h | Cache read | Output |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Haiku 4.5 | $1.00 | $1.25 | $2.00 | $0.10 | $5.00 |
+| Haiku 5.5, at most 100k input | $0.10 | $0.125 | $0.20 | $0.01 | $0.50 |
+| Haiku 5.5, over 100k input | $0.50 | $0.625 | $1.00 | $0.05 | $2.50 |
+| Sonnet 4.5 / 4.6 | $3.00 | $3.75 | $6.00 | $0.30 | $15.00 |
+| Sonnet 5 | $2.00 | $2.50 | $4.00 | $0.20 | $10.00 |
+| Sonnet 5.5 | $2.00 | $2.50 | $4.00 | $0.10 | $10.00 |
+| Opus 4.5 / 4.6 / 4.7 / 4.8 | $5.00 | $6.25 | $10.00 | $0.50 | $25.00 |
+| Opus 5.5 | $4.00 | $5.00 | $8.00 | $0.20 | $20.00 |
+
+[Haiku 5.5](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-5-5.html)
+uses its higher rates for the whole request when total input, including both
+cache buckets, exceeds 100,000 tokens. The other configured Claude versions
+have no long-context price premium.
+
+Claude Code retains separate 5-minute and 1-hour cache-write counts when the
+source supplies them. Their sum must match the total cache-write count.
+If the split is absent, lcost records an assumption of 5-minute writes;
+an incomplete or inconsistent recorded split remains unpriced. Only Standard
+Claude estimates are configured; other recorded tiers remain unpriced.
 
 ### GPT models on Amazon Bedrock
 
-The supported GPT-6 models are `gpt-6-luna`, `gpt-6-sol`, `gpt-6-astra`,
-and `gpt-6.1-sol`. Bare IDs, provider-prefixed IDs, and `us.openai.` or
-`global.openai.` inference IDs retain distinct model labels. Unknown GPT-6
-versions remain unpriced.
+The configured versions are GPT-5.4, GPT-5.5, GPT-5.6 Luna/Terra/Sol,
+GPT-6 Luna/Sol/Astra, and GPT-6.1 Sol. Bare IDs, provider-prefixed IDs,
+and inference IDs retain distinct model labels. Documented hyphenated GPT
+aliases normalize to the same version. Unknown versions remain unpriced.
 
 These Standard prices are USD per million tokens for requests with at most
-272,000 input tokens, verified against AWS model cards on October 6, 2026.
+272,000 input tokens, verified against AWS model cards on October 28, 2026.
 Mantle and US geographic inference already include the 10% premium:
 
 | Model | Mantle/US input | Cache write | Cache read | Output |
 | --- | ---: | ---: | ---: | ---: |
+| GPT-5.6 Luna | $0.22 | $0.275 | $0.022 | $1.32 |
+| GPT-5.6 Terra | $2.20 | $2.75 | $0.22 | $13.20 |
+| GPT-5.6 Sol | $4.40 | $5.50 | $0.44 | $22.00 |
 | GPT-6 Luna | $0.11 | $0.1375 | $0.011 | $0.55 |
 | GPT-6 Sol | $2.20 | $2.75 | $0.22 | $11.00 |
 | GPT-6 Astra | $11.00 | $13.75 | $1.10 | $55.00 |
@@ -130,18 +166,32 @@ Mantle and US geographic inference already include the 10% premium:
 Global inference uses base rates without the premium. For requests exceeding
 272,000 total input tokens, including cached input, all input and cache rates
 double and the output rate increases by 50%. These rates apply to the whole
-request. GPT-6 Astra Ultrafast costs six times the corresponding Standard
-rate; an unsupported recorded service tier remains unpriced.
+request. GPT-6 Astra and GPT-6.1 Sol Ultrafast cost six times the corresponding
+Standard rate; an unsupported recorded service tier remains unpriced.
 
-The same routing and context rules apply to new Bedrock GPT-5.6 estimates.
+[GPT-5.4](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-54.html)
+and [GPT-5.5](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html)
+publish commercial regional prices: respectively $2.75/$16.50 and
+$5.50/$33.00 for input/output, with $0.275/$0.55 cache reads. They use the
+same 272k context threshold and long-context multipliers. Explicit cache-write
+prices and other routes have not been verified, so nonzero cache writes and
+recorded US/global/direct routes remain unpriced for these two versions.
+
 Previously stored prices remain pinned until explicit recalculation.
 
-Codex retains provider, raw model ID, and any recorded service tier or route.
-Cline retains its raw ID and provider before normalizing the display model.
-When a Bedrock route is absent, lcost assumes Mantle/US pricing, which have
-the same rates. An absent service tier defaults to Standard. Both assumptions
-are recorded and shown in query details. lcost does not use today's provider
-configuration to reconstruct historical routes.
+### Recorded pricing context
+
+Codex and Claude Code retain raw model IDs and any recorded provider, route,
+and service tier. Cline retains its raw ID and provider before normalizing
+the display model. Bedrock provider/inference prefixes can identify the route.
+Conflicting recorded routes or inconsistent input totals remain unpriced.
+
+When a known Bedrock request lacks a route, lcost assumes regional/US pricing;
+GPT-5.4/5.5 specifically assume regional pricing. An absent service tier
+defaults to Standard. Without provider evidence, supported base rates are
+used where configured. Assumptions are retained and shown in query details.
+lcost does not use today's provider configuration to reconstruct historical
+routes, and it does not verify account permissions or enable model access.
 
 Estimates retain the rate-card date, AWS source, route, service tier, context
 tier, and assumptions. Rate lookup is local and needs no AWS credentials.
@@ -150,6 +200,9 @@ The primary sources are the AWS model cards for
 [GPT-6 Sol](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html),
 [GPT-6 Astra](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html),
 and [GPT-6.1 Sol](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html).
+The [AWS model catalog](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html)
+is the public source for current IDs and lifecycle status. Legacy or retired
+models may remain in local history even after they can no longer be invoked.
 
 ### Recalculate stored costs
 

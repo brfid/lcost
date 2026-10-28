@@ -24,7 +24,7 @@ def test_codex_rate_card_metadata_is_added_at_ingest_boundary():
 
     assert entry["costProvenance"] == COST_PROVENANCE_RATE_CARD
     assert entry["pricingRef"] == (
-        f"rate-card:{RATE_CARD_VERSION}:gpt-5.6-luna"
+        f"rate-card:{RATE_CARD_VERSION}:gpt-5.6-luna:regional-or-us:standard:short"
     )
 
 
@@ -75,7 +75,9 @@ def test_ledger_ingest_normalizes_collector_records():
 
     stored = ledger["cc:one"]
     assert stored["costProvenance"] == COST_PROVENANCE_RATE_CARD
-    assert stored["pricingRef"] == f"rate-card:{RATE_CARD_VERSION}:sonnet"
+    assert stored["pricingRef"] == (
+        f"rate-card:{RATE_CARD_VERSION}:claude-sonnet-4-6:direct:standard:short"
+    )
     assert stored["cacheReads"] is None
 
 

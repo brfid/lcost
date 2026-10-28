@@ -78,7 +78,9 @@ def test_astra_ultrafast_is_six_times_standard_and_explicit():
     assert estimate["cost"] == pytest.approx(1.485)
     assert estimate["pricingTier"] == "ultrafast"
     assert not any("tier" in a.lower() for a in estimate["pricingAssumptions"])
-    assert estimate_entry(usage(serviceTier="ultrafast")) is None
+    sol = estimate_entry(usage(serviceTier="ultrafast"))
+    assert sol["cost"] == pytest.approx(0.264)
+    assert sol["pricingTier"] == "ultrafast"
     assert estimate_entry(usage(serviceTier="priority")) is None
 
 

@@ -127,7 +127,10 @@ def file_needs_processing(filepath: Path, state: Dict) -> Tuple[bool, int]:
     stored_size = stored.get("size", 0)
 
     if stat.st_size == stored_size and stat.st_mtime == stored.get("mtime"):
-        return False, 0
+        offset = stored.get("byte_offset", 0)
+        # A file can grow after parsing but before its state is recorded.
+        # Retry unread bytes even when the next scan sees unchanged metadata.
+        return (True, offset) if offset < stat.st_size else (False, 0)
 
     if stat.st_size == stored_size:
         return True, 0
@@ -148,19 +151,24 @@ def update_file_state(state: Dict, filepath: Path, byte_offset: int,
         "byte_offset": byte_offset,
         "size": stat.st_size,
         "mtime": stat.st_mtime,
-        "last_user_text": last_user_text,
+        "last_user_text": last_user_text[:80],
     }
 
 
 def get_stored_user_text(state: Dict, filepath: Path) -> str:
     """Retrieve last captured user text for a file, for seeding incremental resumes."""
-    return state.get("files", {}).get(str(filepath), {}).get("last_user_text", "")
+    return state.get("files", {}).get(str(filepath), {}).get("last_user_text", "")[:80]
 
 
 def _normalize_state(state: Dict) -> Dict:
     """Adapt v1 state in memory without forcing an eager migration write."""
     state.setdefault("_version", 1)
     state["files"] = state.get("files") if isinstance(state.get("files"), dict) else {}
+    for file_state in state["files"].values():
+        if isinstance(file_state, dict):
+            text = file_state.get("last_user_text")
+            if isinstance(text, str):
+                file_state["last_user_text"] = text[:80]
     state["sources"] = (
         state.get("sources") if isinstance(state.get("sources"), dict) else {}
     )

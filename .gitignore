@@ -33,3 +33,4 @@ env/
 # Daily ledger backups (including nested runtime directories)
 ledger-*.json
 ingest_state-*.json
+recalc-*.json

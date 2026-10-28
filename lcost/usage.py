@@ -33,6 +33,8 @@ class UsageEntry(TypedDict, total=False):
     tokensIn: Optional[int]
     tokensOut: Optional[int]
     cacheWrites: Optional[int]
+    cacheWrites5m: Optional[int]
+    cacheWrites1h: Optional[int]
     cacheReads: Optional[int]
     cost: Optional[float]
     cacheSavings: Optional[float]

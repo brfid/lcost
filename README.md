@@ -15,8 +15,9 @@ Requires Python 3.9 or later on macOS or Linux. Dashboard dependencies install
 with the package. A [Nerd Font](https://www.nerdfonts.com/) provides the full
 set of terminal glyphs.
 
+Clone this repository from your Git host, then run:
+
 ```bash
-git clone https://github.com/brfid/lcost.git
 cd lcost
 python3 -m venv .venv
 source .venv/bin/activate
@@ -129,8 +130,9 @@ board hides charts or the query inspector to leave room for the call log.
 Cline supplies per-query costs in its session records. Claude Code and
 Codex costs are estimates calculated from token counts and configured model
 rates. These estimates do not allocate subscription fees or reproduce an
-account invoice. GPT-6 Bedrock estimates account for inference routing,
-prompt caching, long context, and recorded service tiers. Unpriced usage
+account invoice. Bedrock estimates for supported Claude and GPT versions account
+for inference routing, prompt caching, context tiers, and recorded service tiers.
+Unknown models and unsupported pricing remain unpriced. Unpriced usage
 marks monetary totals as partial. See [tokens and pricing](docs/reference.md#tokens-and-pricing)
 for the accounting rules and rate sources.
 
@@ -151,6 +153,7 @@ python -m pytest -q
 ```
 
 Tests use synthetic sessions and temporary ledgers. The
-[CI workflow](.github/workflows/guard.yml) defines the tested Python versions
-and platforms. The [module guide](docs/reference.md#module-responsibilities)
+[GitHub workflow](.github/workflows/guard.yml) and
+[GitLab pipeline](.gitlab-ci.yml) define the Python checks; GitHub also tests
+macOS. The [module guide](docs/reference.md#module-responsibilities)
 identifies where collection, storage, calculations, and presentation belong.

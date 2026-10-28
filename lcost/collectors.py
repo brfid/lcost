@@ -14,7 +14,7 @@ from .formatters import (
     FIELD_COST, FIELD_TOKENS_IN, FIELD_TOKENS_OUT,
 )
 from .ingest_state import file_needs_processing, get_stored_user_text, update_file_state
-from .pricing import calculate_cache_savings, calculate_cost, estimate_entry
+from .pricing import calculate_cache_savings, estimate_entry
 
 
 # ---------------------------------------------------------------------------
@@ -530,7 +530,7 @@ def _walk_session_jsonl(session_file: Path, seek_offset: int,
     final_messages: Dict = {}
     spawns: Dict[str, Dict] = {}
     last_good_offset = seek_offset
-    last_user_text = initial_user_text
+    last_user_text = initial_user_text[:80]
     last_prompt_id = ""
     # Subagent (sidechain) files carry `sessionId` pointing to the parent
     # session. We capture the first occurrence and reuse it for spawn
@@ -562,7 +562,7 @@ def _walk_session_jsonl(session_file: Path, seek_offset: int,
                 if obj_type == 'user':
                     text = _extract_user_text(obj)
                     if text and not text.startswith('<'):
-                        last_user_text = text
+                        last_user_text = text[:80]
                     continue
 
                 if obj_type != 'assistant':
@@ -581,6 +581,20 @@ def _walk_session_jsonl(session_file: Path, seek_offset: int,
 
                 stop_reason = msg.get('stop_reason')
                 if stop_reason is not None:
+                    pricing_context = {}
+                    for target, source_keys in (
+                        ('modelProvider', ('model_provider', 'modelProvider', 'provider')),
+                        ('inferenceRoute', ('inference_route', 'inferenceRoute')),
+                        ('serviceTier', ('service_tier', 'serviceTier')),
+                    ):
+                        for record in (msg, obj):
+                            for source_key in source_keys:
+                                value = record.get(source_key)
+                                if isinstance(value, str):
+                                    pricing_context[target] = value
+                                    break
+                            if target in pricing_context:
+                                break
                     final_messages[msg_id] = {
                         'model': msg.get('model'),
                         'usage': usage,
@@ -590,6 +604,7 @@ def _walk_session_jsonl(session_file: Path, seek_offset: int,
                         'tools': tools,
                         'prompt_id': last_prompt_id,
                         'parent_session': parent_session_id,
+                        'pricing_context': pricing_context,
                     }
     except (IOError, OSError) as e:
         if verbose:
@@ -634,19 +649,18 @@ def parse_claude_code_session(session_file: Path, verbose: bool = False,
             usage = data['usage']
             model = data.get('model')
 
-            tokens_in = usage.get('input_tokens', 0)
-            tokens_out = usage.get('output_tokens', 0)
-            cache_writes = usage.get('cache_creation_input_tokens', 0)
-            cache_reads = usage.get('cache_read_input_tokens', 0)
-
-            cost = calculate_cost(tokens_in, tokens_out, cache_writes, cache_reads, model)
+            tokens_in = usage.get('input_tokens')
+            tokens_out = usage.get('output_tokens')
+            cache_writes = usage.get('cache_creation_input_tokens')
+            cache_reads = usage.get('cache_read_input_tokens')
 
             entry_id = f"cc:{msg_id}"
             is_subagent = 'subagents' in session_file.parts
-            entries[entry_id] = {
+            entry = {
                 'source': 'cc',
                 'ts': dt.isoformat(),
                 'model': model,
+                'rawModel': model,
                 'project': _project_from_session_path(session_file),
                 'session': session_file.stem,
                 'parentSession': data.get('parent_session') or '',
@@ -659,9 +673,25 @@ def parse_claude_code_session(session_file: Path, verbose: bool = False,
                 FIELD_TOKENS_OUT: tokens_out,
                 FIELD_CACHE_WRITES: cache_writes,
                 FIELD_CACHE_READS: cache_reads,
-                FIELD_COST: cost,
-                FIELD_CACHE_SAVINGS: calculate_cache_savings(cache_reads, model),
+                FIELD_COST: None,
+                FIELD_CACHE_SAVINGS: None,
+                **data.get('pricing_context', {}),
             }
+            if 'cache_creation' in usage:
+                split = usage['cache_creation']
+                for source_key, target_key in (
+                    ('ephemeral_5m_input_tokens', 'cacheWrites5m'),
+                    ('ephemeral_1h_input_tokens', 'cacheWrites1h'),
+                ):
+                    value = split.get(source_key) if isinstance(split, dict) else None
+                    entry[target_key] = value if (
+                        isinstance(value, int) and not isinstance(value, bool)
+                        and value >= 0
+                    ) else None
+            estimate = estimate_entry(entry)
+            if estimate is not None:
+                entry.update(estimate)
+            entries[entry_id] = entry
         except (ValueError, KeyError, TypeError):
             continue
 

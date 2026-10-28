@@ -19,8 +19,6 @@ from lcost.collectors import _normalize_cline_model
 from lcost.ledger import recalc_ledger_costs
 from lcost.ops_data import model_color, short_model
 from lcost.pricing import (
-    GPT5_PRICING,
-    GPT56_LUNA_PRICING,
     calculate_cost,
     family_for_model,
     has_priced_model,
@@ -53,10 +51,9 @@ class TestPricing:
         cost = calculate_cost(1_000_000, 0, 0, 0, "gpt-5")
         assert cost == pytest.approx(1.25)
 
-    def test_gpt5_5_priced_via_family(self):
-        # "gpt-5-5" matches gpt-5 family token; same rates.
-        cost = calculate_cost(1_000_000, 0, 0, 0, "gpt-5-5")
-        assert cost == pytest.approx(GPT5_PRICING["input"])
+    def test_gpt5_5_has_its_own_verified_price(self):
+        cost = calculate_cost(1_000, 0, 0, 0, "openai.gpt-5-5")
+        assert cost == pytest.approx(0.0055)
 
     def test_gpt5_mini_priced(self):
         cost = calculate_cost(1_000_000, 1_000_000, 0, 0, "gpt-5-mini")
@@ -65,10 +62,10 @@ class TestPricing:
 
     def test_codex_bedrock_luna_priced(self):
         cost = calculate_cost(
-            1_000_000, 1_000_000, 1_000_000, 1_000_000,
+            1_000, 1_000, 1_000, 1_000,
             "openai.gpt-5.6-luna",
         )
-        assert cost == pytest.approx(sum(GPT56_LUNA_PRICING.values()))
+        assert cost == pytest.approx(0.001837)
         fam = family_for_model("openai.gpt-5.6-luna")
         assert fam is not None and fam.key == "gpt-5.6-luna"
 

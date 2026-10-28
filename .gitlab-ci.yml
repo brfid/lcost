@@ -1,0 +1,19 @@
+stages:
+  - test
+
+runtime-data:
+  stage: test
+  image: python:3.11
+  script:
+    - ./scripts/pre-commit --all
+
+tests:
+  stage: test
+  image: python:${PYTHON_VERSION}
+  parallel:
+    matrix:
+      - PYTHON_VERSION: ["3.9", "3.11", "3.14"]
+  before_script:
+    - python -m pip install -e '.[test]'
+  script:
+    - python -m pytest -q
