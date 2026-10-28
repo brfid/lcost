@@ -2,7 +2,8 @@
 
 import argparse
 import math
-from contextlib import nullcontext
+import os
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
@@ -65,6 +66,7 @@ Examples:
   lcost --source cline        # Dashboard, Cline only
   lcost --source claude-code  # Dashboard, Claude Code only
   lcost --source codex        # Dashboard, Codex / ChatGPT only
+  lcost --color always        # Dashboard colors even when NO_COLOR is set
   lcost --cached              # Skip scanning live sources
   lcost --rescan              # Rescan all files from scratch
   lcost --deep                # Re-parse files and retain the ledger
@@ -118,6 +120,11 @@ Examples:
     parser.add_argument(
         '--cached', action='store_true',
         help='report from stored data only, skip scanning live sources'
+    )
+    parser.add_argument(
+        '--color', choices=('auto', 'always', 'never'), default='auto',
+        help='dashboard colors: auto respects NO_COLOR; always overrides it; '
+             'never uses monochrome (default: auto)'
     )
     parser.add_argument(
         '--rescan', action='store_true',
@@ -184,6 +191,27 @@ Examples:
     if args.date_from and args.date_to and args.date_from > args.date_to:
         parser.error("--from must be on or before --to")
     return args
+
+
+@contextmanager
+def _dashboard_colors(mode: str):
+    """Apply the dashboard's color preference for this invocation."""
+    if mode == 'auto':
+        yield
+        return
+
+    previous = os.environ.get('NO_COLOR')
+    if mode == 'always':
+        os.environ.pop('NO_COLOR', None)
+    else:
+        os.environ['NO_COLOR'] = '1'
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop('NO_COLOR', None)
+        else:
+            os.environ['NO_COLOR'] = previous
 
 
 def _format_bytes(size_bytes: int) -> str:
@@ -364,21 +392,25 @@ def main():
             print("Dashboard dependencies are missing. Reinstall with: pip install -e .")
             return 1
         from lcost.pidfile import AlreadyRunning, single_instance
+        from lcost.terminal import compatible_app_class
+
+        app_class = compatible_app_class(CostTrackerApp)
         try:
             with (nullcontext() if args.demo else single_instance(force=args.force)):
-                app = CostTrackerApp(
-                    ledger_path_override=args.ledger_path,
-                    source_filter=args.source,
-                    no_ingest=args.cached,
-                    force_ingest=args.rescan,
-                    project_filter=args.project,
-                    date_from=args.date_from,
-                    date_to=args.date_to,
-                    days=None if args.all else args.days,
-                    deep=args.deep,
-                    max_gap_hours=args.max_gap_hours,
-                    demo=args.demo,
-                )
+                with _dashboard_colors(args.color):
+                    app = app_class(
+                        ledger_path_override=args.ledger_path,
+                        source_filter=args.source,
+                        no_ingest=args.cached,
+                        force_ingest=args.rescan,
+                        project_filter=args.project,
+                        date_from=args.date_from,
+                        date_to=args.date_to,
+                        days=None if args.all else args.days,
+                        deep=args.deep,
+                        max_gap_hours=args.max_gap_hours,
+                        demo=args.demo,
+                    )
                 app.run()
         except AlreadyRunning as exc:
             print(str(exc))

@@ -3,6 +3,16 @@
 See the [README](../README.md) for installation, the demo, and dashboard
 controls. This reference covers filtering, stored data, and maintenance.
 
+## Dashboard colors
+
+`--color auto` is the default and respects `NO_COLOR`, including an empty
+value. `--color always` enables the dashboard palette even when `NO_COLOR`
+is set; `--color never` selects monochrome. These options apply to the
+dashboard. Text reports remain plain text.
+
+Apple Terminal uses its normal window-resize notifications without the
+unsupported capability query that can display a stray `p` during startup.
+
 ## Date filtering
 
 `--from` and `--to` accept inclusive dates in local time. Either option takes

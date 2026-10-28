@@ -60,6 +60,10 @@ and active days in reports; see [date filtering](docs/reference.md#date-filterin
 for the defaults and interaction with other options. `lcost --help` lists
 all command-line options.
 
+Dashboard colors follow your terminal settings and `NO_COLOR` by default.
+Use `lcost --color always` to enable the palette even when `NO_COLOR` is set,
+or `lcost --color never` for monochrome.
+
 ## Read the dashboard
 
 The board puts period summaries beside recent activity:

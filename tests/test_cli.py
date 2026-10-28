@@ -1,6 +1,7 @@
 """Exercise command-line contracts through the public entry point."""
 from contextlib import nullcontext
 from datetime import datetime, timedelta
+import os
 from unittest.mock import Mock
 
 import pytest
@@ -12,6 +13,7 @@ from lcost.ledger import save_ledger
 def test_dashboard_receives_filters_and_scan_options(tmp_path, monkeypatch):
     path = tmp_path / "ledger.json"
     app = Mock()
+    monkeypatch.setenv("TERM_PROGRAM", "ghostty")
     monkeypatch.setattr("lcost.tui.CostTrackerApp", app)
     monkeypatch.setattr("lcost.pidfile.single_instance", lambda **kwargs: nullcontext())
     monkeypatch.setattr("sys.argv", [
@@ -33,6 +35,7 @@ def test_dashboard_receives_filters_and_scan_options(tmp_path, monkeypatch):
     ["--from", "2026-09-12", "--to", "2026-09-01"],
     ["--days", "0"], ["--days", "-1"],
     ["--max-gap-hours", "nan"], ["--max-gap-hours", "inf"], ["--max-gap-hours", "-1"],
+    ["--color", "truecolor"],
 ])
 def test_invalid_options_fail_before_loading_data(args, monkeypatch):
     monkeypatch.setattr("sys.argv", ["lcost", *args])
@@ -112,3 +115,76 @@ def test_recalc_selection_is_not_silently_ignored_by_other_modes(args, monkeypat
     monkeypatch.setattr("sys.argv", ["lcost", "--report", *args])
     with pytest.raises(SystemExit):
         parse_arguments()
+
+
+@pytest.mark.parametrize("original", [None, "", "1"])
+@pytest.mark.parametrize("mode", ["auto", "always", "never"])
+def test_dashboard_color_mode_and_environment_restoration(original, mode, monkeypatch):
+    from rich.segment import Segment
+    from rich.style import Style
+    from textual.color import Color
+    from lcost.tui import CostTrackerApp
+
+    if original is None:
+        monkeypatch.delenv("NO_COLOR", raising=False)
+    else:
+        monkeypatch.setenv("NO_COLOR", original)
+    before = dict(os.environ)
+    observed = []
+    palette = []
+
+    def inspect_dashboard(app):
+        observed.append(app.no_color)
+        segments = [Segment("palette", Style(color="#ff9900", bgcolor="#cc6699"))]
+        for line_filter in app.get_line_filters():
+            segments = line_filter.apply(segments, Color.parse("#000000"))
+        style = segments[0].style
+        palette.append((style.color.triplet, style.bgcolor.triplet))
+        # The option changes this dashboard, not its surrounding environment.
+        assert dict(os.environ) == before
+
+    monkeypatch.setattr(CostTrackerApp, "run", inspect_dashboard)
+    monkeypatch.setattr("sys.argv", ["lcost", "--demo", "--color", mode])
+    assert main() == 0
+    expected_monochrome = mode == "never" or (mode == "auto" and original is not None)
+    assert observed == [expected_monochrome]
+    foreground, background = palette[0]
+    if expected_monochrome:
+        assert len(set(foreground)) == len(set(background)) == 1
+    else:
+        assert foreground == (255, 153, 0)
+        assert background == (204, 102, 153)
+    assert dict(os.environ) == before
+
+
+@pytest.mark.parametrize("original,mode", [(None, "never"), ("", "always"), ("1", "always")])
+def test_color_environment_restored_when_dashboard_creation_fails(original, mode, monkeypatch):
+    from lcost.tui import CostTrackerApp
+
+    if original is None:
+        monkeypatch.delenv("NO_COLOR", raising=False)
+    else:
+        monkeypatch.setenv("NO_COLOR", original)
+    before = dict(os.environ)
+
+    def failed_dashboard(self, **kwargs):
+        raise RuntimeError("dashboard construction failed")
+
+    monkeypatch.setattr(CostTrackerApp, "__init__", failed_dashboard)
+    monkeypatch.setattr("sys.argv", ["lcost", "--demo", "--color", mode])
+    with pytest.raises(RuntimeError, match="dashboard construction failed"):
+        main()
+    assert dict(os.environ) == before
+
+
+@pytest.mark.parametrize("mode", ["auto", "always", "never"])
+def test_color_option_keeps_reports_plain_and_environment_unchanged(mode, monkeypatch, capsys):
+    monkeypatch.setenv("NO_COLOR", "")
+    before = dict(os.environ)
+    monkeypatch.setattr("sys.argv", ["lcost", "--demo", "--report", "--days", "1",
+                                    "--color", mode])
+    assert main() == 0
+    output = capsys.readouterr().out
+    assert "DEMO DATA" in output and "TOTAL" in output
+    assert "\x1b" not in output
+    assert dict(os.environ) == before
