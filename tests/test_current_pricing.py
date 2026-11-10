@@ -29,7 +29,7 @@ def test_claude_version_specific_standard_prices(model, base, route, premium):
     quote = estimate_entry(entry)
     assert quote["cost"] == pytest.approx(base * premium)
     assert quote["pricingRoute"] == route
-    assert quote["pricingVerifiedAt"] == "2026-10-28"
+    assert quote["pricingVerifiedAt"] == "2026-11-10"
 
 
 @pytest.mark.parametrize("input_total,multiplier,context", [

@@ -155,12 +155,13 @@ Claude estimates are configured; other recorded tiers remain unpriced.
 ### GPT models on Amazon Bedrock
 
 The configured versions are GPT-5.4, GPT-5.5, GPT-5.6 Luna/Terra/Sol,
-GPT-6 Luna/Sol/Astra, and GPT-6.1 Sol. Bare IDs, provider-prefixed IDs,
-and inference IDs retain distinct model labels. Documented hyphenated GPT
+GPT-6 Luna/Sol/Astra, and GPT-6.1 Terra/Sol. Bare IDs, provider-prefixed IDs,
+and inference IDs retain distinct model labels. Supported hyphenated GPT
 aliases normalize to the same version. Unknown versions remain unpriced.
 
 These Standard prices are USD per million tokens for requests with at most
-272,000 input tokens, verified against AWS model cards on October 28, 2026.
+272,000 input tokens, verified against AWS model cards on October 28, 2026,
+with GPT-6.1 Terra added and verified on November 10, 2026.
 Mantle and US geographic inference already include the 10% premium:
 
 | Model | Mantle/US input | Cache write | Cache read | Output |
@@ -171,6 +172,7 @@ Mantle and US geographic inference already include the 10% premium:
 | GPT-6 Luna | $0.11 | $0.1375 | $0.011 | $0.55 |
 | GPT-6 Sol | $2.20 | $2.75 | $0.22 | $11.00 |
 | GPT-6 Astra | $11.00 | $13.75 | $1.10 | $55.00 |
+| GPT-6.1 Terra | $1.10 | $1.375 | $0.055 | $5.50 |
 | GPT-6.1 Sol | $2.20 | $2.75 | $0.11 | $11.00 |
 
 Global inference uses base rates without the premium. For requests exceeding
@@ -178,6 +180,9 @@ Global inference uses base rates without the premium. For requests exceeding
 double and the output rate increases by 50%. These rates apply to the whole
 request. GPT-6 Astra and GPT-6.1 Sol Ultrafast cost six times the corresponding
 Standard rate; an unsupported recorded service tier remains unpriced.
+GPT-6.1 Terra supports Standard pricing only; its cache-write rate covers
+30-minute retention. The local alias `gpt-6-1-terra` normalizes to
+`gpt-6.1-terra`; AWS documents the dotted model ID.
 
 [GPT-5.4](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-54.html)
 and [GPT-5.5](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html)
@@ -209,6 +214,7 @@ The primary sources are the AWS model cards for
 [GPT-6 Luna](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html),
 [GPT-6 Sol](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html),
 [GPT-6 Astra](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html),
+[GPT-6.1 Terra](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-terra.html),
 and [GPT-6.1 Sol](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html).
 The [AWS model catalog](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html)
 is the public source for current IDs and lifecycle status. Legacy or retired

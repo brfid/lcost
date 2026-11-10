@@ -19,7 +19,7 @@ from typing import Dict, List, Mapping, Optional, Tuple
 
 # Bump this when any configured token price changes. New entries retain this
 # reference so a future rate change is explainable without account billing.
-RATE_CARD_VERSION = "2026-10-28"
+RATE_CARD_VERSION = "2026-11-10"
 
 # USD per million tokens
 # Source: https://www.anthropic.com/pricing  (verify quarterly — update here if stale)
@@ -92,6 +92,10 @@ GPT6_ASTRA_PRICING = {
 GPT61_SOL_PRICING = {
     'input': 2.00, 'output': 10.00, 'cache_write': 2.50, 'cache_read': 0.10,
 }
+# GPT-6.1 Terra Standard Global prices, verified 2026-11-10.
+GPT61_TERRA_PRICING = {
+    'input': 1.00, 'output': 5.00, 'cache_write': 1.25, 'cache_read': 0.05,
+}
 
 _AWS_CARD_ROOT = "https://docs.aws.amazon.com/bedrock/latest/userguide/"
 BEDROCK_MODEL_CARDS = {
@@ -104,6 +108,7 @@ BEDROCK_MODEL_CARDS = {
     "gpt-6-sol": _AWS_CARD_ROOT + "model-card-openai-gpt-6-sol.html",
     "gpt-6-astra": _AWS_CARD_ROOT + "model-card-openai-gpt-6-astra.html",
     "gpt-6.1-sol": _AWS_CARD_ROOT + "model-card-openai-gpt-6-1-sol.html",
+    "gpt-6.1-terra": _AWS_CARD_ROOT + "model-card-openai-gpt-6-1-terra.html",
 }
 BEDROCK_MODEL_CARDS.update({
     model: _AWS_CARD_ROOT + "model-card-anthropic-" + model + ".html"
@@ -116,12 +121,15 @@ BEDROCK_MODEL_CARDS.update({
     )
 })
 LONG_CONTEXT_THRESHOLD = 272_000
-_GPT6_KEYS = frozenset(("gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "gpt-6.1-sol"))
+_GPT6_KEYS = frozenset((
+    "gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra",
+))
 _GPT_CONTEXT_KEYS = _GPT6_KEYS | frozenset((
     "gpt-5.4", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
 ))
 _MODEL_ALIASES = {
     "gpt-6-1-sol": "gpt-6.1-sol",
+    "gpt-6-1-terra": "gpt-6.1-terra",
     "gpt-5-4": "gpt-5.4",
     "gpt-5-5": "gpt-5.5",
     **{f"gpt-5-6-{name}": f"gpt-5.6-{name}" for name in ("sol", "terra", "luna")},
@@ -158,6 +166,8 @@ FAMILIES: List[ModelFamily] = [
     ModelFamily("opus",   ("opus",),               "#FF9900", OPUS_PRICING),
     ModelFamily("sonnet", ("sonnet",),             "#9999CC", SONNET_PRICING),
     ModelFamily("haiku",  ("haiku",),              "#CC6699", HAIKU_PRICING),
+    ModelFamily("gpt-6.1-terra", ("gpt-6.1-terra", "gpt-6-1-terra"),
+                "#80C766", GPT61_TERRA_PRICING),
     ModelFamily("gpt-6.1-sol", ("gpt-6.1-sol", "gpt-6-1-sol"),
                 "#5ABF8B", GPT61_SOL_PRICING),
     ModelFamily("gpt-6-astra", ("gpt-6-astra",), "#B58AE0", GPT6_ASTRA_PRICING),

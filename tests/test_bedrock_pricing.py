@@ -26,7 +26,7 @@ def usage(model="openai.gpt-6.1-sol", **changes):
 
 @pytest.mark.parametrize("model,expected", [
     ("gpt-6-luna", 0.002475), ("gpt-6-sol", 0.0495),
-    ("gpt-6-astra", 0.2475), ("gpt-6.1-sol", 0.044),
+    ("gpt-6-astra", 0.2475), ("gpt-6.1-sol", 0.044), ("gpt-6.1-terra", 0.022),
 ])
 @pytest.mark.parametrize("prefix", ["", "openai.", "us.openai."])
 def test_standard_us_price_examples_and_labels(model, expected, prefix):
@@ -44,7 +44,7 @@ def test_standard_us_price_examples_and_labels(model, expected, prefix):
 
 @pytest.mark.parametrize("model,expected", [
     ("gpt-6-luna", 0.00225), ("gpt-6-sol", 0.045),
-    ("gpt-6-astra", 0.225), ("gpt-6.1-sol", 0.04),
+    ("gpt-6-astra", 0.225), ("gpt-6.1-sol", 0.04), ("gpt-6.1-terra", 0.02),
 ])
 def test_global_rates_have_no_extra_aws_premium(model, expected):
     estimate = estimate_entry(usage("global.openai." + model))
@@ -56,12 +56,16 @@ def test_global_rates_have_no_extra_aws_premium(model, expected):
 @pytest.mark.parametrize("cached,expected,context", [
     (271_000, 0.04301, "short"), (271_001, 0.08052022, "long"),
 ])
-def test_context_boundary_includes_cached_input(cached, expected, context):
+@pytest.mark.parametrize("model,scale", [
+    ("openai.gpt-6.1-sol", 1), ("openai.gpt-6.1-terra", 0.5),
+])
+def test_context_boundary_includes_cached_input(cached, expected, context, model, scale):
     estimate = estimate_entry(usage(
+        model,
         tokensIn=1_000, tokensOut=1_000, cacheWrites=0, cacheReads=cached,
         reportedInputTokens=1_000 + cached,
     ))
-    assert estimate["cost"] == pytest.approx(expected)
+    assert estimate["cost"] == pytest.approx(expected * scale)
     assert estimate["pricingContext"] == context
 
 
@@ -86,16 +90,23 @@ def test_astra_ultrafast_is_six_times_standard_and_explicit():
 
 @pytest.mark.parametrize("model", [
     "openai.gpt-6.2-sol", "openai.gpt-6-sol-unknown", "gpt-6-terra",
+    "openai.gpt-6.1-terra-unknown", "openai.gpt-6.2-terra",
 ])
 def test_future_gpt_models_remain_unpriced(model):
     assert family_for_model(model).key == "gpt"
     assert estimate_entry(usage(model)) is None
 
 
-def test_hyphenated_alias_is_a_distinct_sol_61_model():
-    entry = usage("us.openai.gpt-6-1-sol")
-    assert short_model(entry["model"]) == "gpt-6.1-sol"
-    assert estimate_entry(entry)["cost"] == pytest.approx(0.044)
+@pytest.mark.parametrize("name,expected", [("sol", 0.044), ("terra", 0.022)])
+def test_hyphenated_alias_is_a_distinct_gpt61_model(name, expected):
+    entry = usage(f"us.openai.gpt-6-1-{name}")
+    assert short_model(entry["model"]) == f"gpt-6.1-{name}"
+    assert estimate_entry(entry)["cost"] == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("tier", ["ultrafast", "priority", "flex"])
+def test_terra_unsupported_service_tiers_remain_unpriced(tier):
+    assert estimate_entry(usage("openai.gpt-6.1-terra", serviceTier=tier)) is None
 
 
 def test_route_assumption_is_stored_but_cannot_override_recorded_route():
@@ -124,31 +135,35 @@ def test_cline_retains_provider_and_route_and_preserves_reported_cost():
     assert entry["cacheSavings"] == pytest.approx(0.095)
 
 
-def test_selected_unpriced_migration_is_dry_run_safe_and_repeatable(tmp_path):
+@pytest.mark.parametrize("model,expected", [
+    ("gpt-6.1-sol", 0.044), ("gpt-6.1-terra", 0.022),
+])
+def test_selected_unpriced_migration_is_dry_run_safe_and_repeatable(tmp_path, model, expected):
     ledger = {
-        "missing": usage(),
-        "priced": usage(cost=8.0),
+        "missing": usage("openai." + model),
+        "priced": usage("openai." + model, cost=8.0),
         "other-model": usage("openai.gpt-5.6-sol"),
-        "other-provider": usage(modelProvider="openai"),
-        "cline": usage(source="cline", cost=9.0, costProvenance="source_reported"),
+        "other-provider": usage("openai." + model, modelProvider="openai"),
+        "cline": usage("openai." + model, source="cline", cost=9.0,
+                       costProvenance="source_reported"),
     }
     path = tmp_path / "ledger.json"
     path.write_text(json.dumps(ledger))
     original = copy.deepcopy(ledger)
     original_bytes = path.read_bytes()
     selection = dict(
-        source_filter="codex", model_filters=["gpt-6.1-sol"],
+        source_filter="codex", model_filters=[model],
         provider_filter="amazon-bedrock", only_unpriced=True,
     )
     old, new, changed, skipped = recalc_ledger_costs(path, ledger, dry_run=True, **selection)
     assert (old, changed, skipped) == (0, 1, 0)
-    assert new == pytest.approx(0.044)
+    assert new == pytest.approx(expected)
     assert ledger == original
     assert path.read_bytes() == original_bytes
     assert not (tmp_path / "backups").exists()
 
     recalc_ledger_costs(path, ledger, **selection)
-    assert ledger["missing"]["cost"] == pytest.approx(0.044)
+    assert ledger["missing"]["cost"] == pytest.approx(expected)
     assert ledger["missing"]["costProvenance"] == "rate_card_estimate"
     for key in ("priced", "other-model", "other-provider", "cline"):
         assert ledger[key] == original[key]

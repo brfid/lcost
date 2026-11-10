@@ -80,15 +80,19 @@ def _write_rollout(root: Path, rollout_id=ROLLOUT_ONE, *,
 
 
 class TestCodexCollector:
-    def test_gpt61_caching_and_recorded_service_tier_survive_ingestion(self, tmp_path):
+    @pytest.mark.parametrize("model,expected", [
+        ("us.openai.gpt-6.1-sol", 0.002508),
+        ("us.openai.gpt-6.1-terra", 0.001254),
+    ])
+    def test_gpt61_caching_and_recorded_service_tier_survive_ingestion(self, tmp_path, model, expected):
         records = _rollout_records()
         records[2]["payload"].update({
-            "model": "us.openai.gpt-6.1-sol", "service_tier": "default",
+            "model": model, "service_tier": "default",
         })
         entries, _ = parse_codex_session(_write_rollout(tmp_path, records=records))
         entry = next(iter(entries.values()))
-        assert entry["cost"] == pytest.approx(0.002508)
-        assert entry["rawModel"] == "us.openai.gpt-6.1-sol"
+        assert entry["cost"] == pytest.approx(expected)
+        assert entry["rawModel"] == model
         assert entry["pricingRoute"] == "us"
         assert entry["serviceTier"] == "default"
         assert entry["pricingAssumptions"] == []
