@@ -27,6 +27,7 @@ def usage(model="openai.gpt-6.1-sol", **changes):
 @pytest.mark.parametrize("model,expected", [
     ("gpt-6-luna", 0.002475), ("gpt-6-sol", 0.0495),
     ("gpt-6-astra", 0.2475), ("gpt-6.1-sol", 0.044), ("gpt-6.1-terra", 0.022),
+    ("gpt-6.2-sol", 0.044), ("gpt-6.2-astra", 0.176),
 ])
 @pytest.mark.parametrize("prefix", ["", "openai.", "us.openai."])
 def test_standard_us_price_examples_and_labels(model, expected, prefix):
@@ -45,6 +46,7 @@ def test_standard_us_price_examples_and_labels(model, expected, prefix):
 @pytest.mark.parametrize("model,expected", [
     ("gpt-6-luna", 0.00225), ("gpt-6-sol", 0.045),
     ("gpt-6-astra", 0.225), ("gpt-6.1-sol", 0.04), ("gpt-6.1-terra", 0.02),
+    ("gpt-6.2-sol", 0.04), ("gpt-6.2-astra", 0.16),
 ])
 def test_global_rates_have_no_extra_aws_premium(model, expected):
     estimate = estimate_entry(usage("global.openai." + model))
@@ -58,6 +60,7 @@ def test_global_rates_have_no_extra_aws_premium(model, expected):
 ])
 @pytest.mark.parametrize("model,scale", [
     ("openai.gpt-6.1-sol", 1), ("openai.gpt-6.1-terra", 0.5),
+    ("openai.gpt-6.2-sol", 1), ("openai.gpt-6.2-astra", 4),
 ])
 def test_context_boundary_includes_cached_input(cached, expected, context, model, scale):
     estimate = estimate_entry(usage(
@@ -89,12 +92,51 @@ def test_astra_ultrafast_is_six_times_standard_and_explicit():
 
 
 @pytest.mark.parametrize("model", [
-    "openai.gpt-6.2-sol", "openai.gpt-6-sol-unknown", "gpt-6-terra",
+    "openai.gpt-6.2-sol-unknown", "openai.gpt-6-sol-unknown", "gpt-6-terra",
     "openai.gpt-6.1-terra-unknown", "openai.gpt-6.2-terra",
 ])
 def test_future_gpt_models_remain_unpriced(model):
     assert family_for_model(model).key == "gpt"
+    assert short_model(model) == model.removeprefix("openai.")
     assert estimate_entry(usage(model)) is None
+
+
+@pytest.mark.parametrize("stamp,multiplier", [
+    ("2027-02-28T23:59:59-08:00", 3), ("2027-03-01T08:00:00Z", 6),
+])
+@pytest.mark.parametrize("model,provider,expected", [
+    ("us.openai.gpt-6.2-astra", "amazon-bedrock", 0.176),
+    ("gpt-6.2-astra", "openai", 0.16),
+    ("gpt-6.2-sol", "openai", 0.04),
+])
+def test_gpt62_ultrafast_uses_request_time(model, provider, expected, stamp, multiplier):
+    estimate = estimate_entry(usage(model, modelProvider=provider, ts=stamp,
+                                    serviceTier="ultrafast"))
+    assert estimate["cost"] == pytest.approx(expected * multiplier)
+    assert estimate["pricingRef"].endswith(f":ultrafast:short:{multiplier}x")
+    assert estimate["pricingVerifiedAt"] == "2026-11-24"
+
+
+@pytest.mark.parametrize("stamp", [None, "invalid", "2027-03-01T08:00:00"])
+def test_gpt62_ultrafast_requires_timestamp_with_offset(stamp):
+    assert estimate_entry(usage(
+        "openai.gpt-6.2-astra", serviceTier="ultrafast", ts=stamp,
+    )) is None
+
+
+def test_bedrock_gpt62_sol_does_not_use_openai_ultrafast_rates():
+    assert estimate_entry(usage(
+        "openai.gpt-6.2-sol", serviceTier="ultrafast", ts="2026-11-24T15:00:00Z",
+    )) is None
+
+
+@pytest.mark.parametrize("model,expected", [
+    ("gpt-6.2-sol", 0.044), ("gpt-6.2-astra", 0.176),
+])
+def test_gpt62_hyphenated_ids_have_canonical_labels_and_rates(model, expected):
+    entry = usage("us.openai." + model.replace("6.2", "6-2"))
+    assert short_model(entry["model"]) == model
+    assert estimate_entry(entry)["cost"] == pytest.approx(expected)
 
 
 @pytest.mark.parametrize("name,expected", [("sol", 0.044), ("terra", 0.022)])
@@ -137,6 +179,7 @@ def test_cline_retains_provider_and_route_and_preserves_reported_cost():
 
 @pytest.mark.parametrize("model,expected", [
     ("gpt-6.1-sol", 0.044), ("gpt-6.1-terra", 0.022),
+    ("gpt-6.2-sol", 0.044), ("gpt-6.2-astra", 0.176),
 ])
 def test_selected_unpriced_migration_is_dry_run_safe_and_repeatable(tmp_path, model, expected):
     ledger = {

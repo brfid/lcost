@@ -83,8 +83,10 @@ class TestCodexCollector:
     @pytest.mark.parametrize("model,expected", [
         ("us.openai.gpt-6.1-sol", 0.002508),
         ("us.openai.gpt-6.1-terra", 0.001254),
+        ("us.openai.gpt-6.2-sol", 0.002508),
+        ("us.openai.gpt-6.2-astra", 0.010032),
     ])
-    def test_gpt61_caching_and_recorded_service_tier_survive_ingestion(self, tmp_path, model, expected):
+    def test_gpt6_caching_and_recorded_service_tier_survive_ingestion(self, tmp_path, model, expected):
         records = _rollout_records()
         records[2]["payload"].update({
             "model": model, "service_tier": "default",

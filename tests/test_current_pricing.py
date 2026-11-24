@@ -2,6 +2,7 @@
 
 import pytest
 
+from lcost.ops_data import short_model
 from lcost.pricing import (
     calculate_cost, estimate_entry, family_for_model, get_model_pricing,
 )
@@ -126,6 +127,53 @@ def test_unverified_model_prices_never_fall_back_to_another_model(model):
 def test_gemma_and_gemini_are_separate_display_families():
     assert family_for_model("google.gemma-4-31b").key == "gemma"
     assert family_for_model("google.gemini-pro").key == "gemini"
+
+
+@pytest.mark.parametrize("tier,multiplier", [("default", 1), ("priority", 2), ("batch", 0.5)])
+def test_direct_gpt62_records_provider_rates_and_cache_assumption(tier, multiplier):
+    result = estimate_entry(usage(
+        "gpt-6.2-sol", modelProvider="openai", inferenceRoute="direct", serviceTier=tier,
+    ))
+    assert result["cost"] == pytest.approx(0.04 * multiplier)
+    assert result["pricingTier"] == {"default": "standard", "priority": "fast"}.get(tier, tier)
+    assert result["pricingSource"].startswith("https://developers.openai.com/")
+    assert "30 minutes" in " ".join(result["pricingAssumptions"])
+
+
+@pytest.mark.parametrize("model,expected", [
+    ("gpt-6.2-astra-law", 0.14), ("gpt-6.2-astra-healthcare", 0.14),
+    ("gpt-6.2-sol-healthcare", 0.035), ("gpt-6-astra-law", 0.2),
+    ("gpt-6-astra-healthcare", 0.2), ("gpt-6.1-sol-healthcare", 0.035),
+    ("gpt-6-rosalind", 0.2), ("gpt-6-cyber", 0.4),
+    ("gpt-5.4-mini", 0.01575), ("gpt-5.4-nano", 0.00425),
+])
+def test_new_specialized_model_has_its_own_direct_rate(model, expected):
+    entry = usage(model, modelProvider="openai", cacheWrites=0, reportedInputTokens=60_000)
+    assert short_model(model) == model
+    assert estimate_entry(entry)["cost"] == pytest.approx(expected)
+    assert estimate_entry({**entry, "modelProvider": "amazon-bedrock"}) is None
+
+
+def test_gpt56_cyber_bedrock_quote_uses_published_commercial_regional_rates():
+    entry = usage("openai.gpt-5.6-cyber")
+    assert estimate_entry(entry)["cost"] == pytest.approx(0.323125)
+    assert estimate_entry({**entry, "inferenceRoute": "global"}) is None
+    assert estimate_entry({**entry, "cacheReads": 300_000, "reportedInputTokens": 312_000}) is None
+
+
+def test_gpt54_mini_snapshot_and_unverified_variant_have_distinct_labels():
+    assert short_model("gpt-5.4-mini-2026-03-17") == "gpt-5.4-mini"
+    model = "gpt-5.4-mini-future"
+    assert short_model(model) == model
+    assert get_model_pricing(model) is None
+
+
+def test_healthcare_fast_has_no_published_cache_write_rate():
+    entry = usage("gpt-6.2-sol-healthcare", modelProvider="openai", serviceTier="fast")
+    assert estimate_entry(entry) is None
+    assert estimate_entry({**entry, "cacheWrites": 0, "reportedInputTokens": 60_000})[
+        "cost"
+    ] == pytest.approx(0.07)
 
 
 def test_inconsistent_reported_input_cannot_bypass_long_context_rates():

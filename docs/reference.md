@@ -154,14 +154,15 @@ Claude estimates are configured; other recorded tiers remain unpriced.
 
 ### GPT models on Amazon Bedrock
 
-The configured versions are GPT-5.4, GPT-5.5, GPT-5.6 Luna/Terra/Sol,
-GPT-6 Luna/Sol/Astra, and GPT-6.1 Terra/Sol. Bare IDs, provider-prefixed IDs,
-and inference IDs retain distinct model labels. Supported hyphenated GPT
-aliases normalize to the same version. Unknown versions remain unpriced.
+The configured versions are GPT-5.4, GPT-5.5, GPT-5.6 Luna/Terra/Sol/Cyber,
+GPT-6 Luna/Sol/Astra, GPT-6.1 Terra/Sol, and GPT-6.2 Sol/Astra.
+Supported hyphenated GPT aliases normalize to the same version. Unknown
+versions remain visible by model ID and unpriced.
 
 These Standard prices are USD per million tokens for requests with at most
 272,000 input tokens, verified against AWS model cards on October 28, 2026,
-with GPT-6.1 Terra added and verified on November 10, 2026.
+with GPT-6.1 Terra verified on November 10 and GPT-6.2 Sol/Astra on
+November 24, 2026.
 Mantle and US geographic inference already include the 10% premium:
 
 | Model | Mantle/US input | Cache write | Cache read | Output |
@@ -174,12 +175,17 @@ Mantle and US geographic inference already include the 10% premium:
 | GPT-6 Astra | $11.00 | $13.75 | $1.10 | $55.00 |
 | GPT-6.1 Terra | $1.10 | $1.375 | $0.055 | $5.50 |
 | GPT-6.1 Sol | $2.20 | $2.75 | $0.11 | $11.00 |
+| GPT-6.2 Sol | $2.20 | $2.75 | $0.11 | $11.00 |
+| GPT-6.2 Astra | $8.80 | $11.00 | $0.44 | $44.00 |
 
 Global inference uses base rates without the premium. For requests exceeding
 272,000 total input tokens, including cached input, all input and cache rates
 double and the output rate increases by 50%. These rates apply to the whole
 request. GPT-6 Astra and GPT-6.1 Sol Ultrafast cost six times the corresponding
-Standard rate; an unsupported recorded service tier remains unpriced.
+Standard rate. GPT-6.2 Astra Ultrafast costs three times Standard through
+February 28, 2027 Pacific time and six times Standard from March 1.
+GPT-6.2 Sol supports Standard on Bedrock. An unsupported recorded service
+tier remains unpriced.
 GPT-6.1 Terra supports Standard pricing only; its cache-write rate covers
 30-minute retention. The local alias `gpt-6-1-terra` normalizes to
 `gpt-6.1-terra`; AWS documents the dotted model ID.
@@ -192,7 +198,26 @@ same 272k context threshold and long-context multipliers. Explicit cache-write
 prices and other routes have not been verified, so nonzero cache writes and
 recorded US/global/direct routes remain unpriced for these two versions.
 
+[GPT-5.6 Cyber](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-cyber.html)
+publishes Standard commercial regional rates of $13.75 input, $17.1875
+cache write, $1.375 cache read, and $82.50 output per million tokens for
+requests with at most 272,000 input tokens.
+
 Previously stored prices remain pinned until explicit recalculation.
+
+### GPT models on the OpenAI API
+
+GPT-6.2 Sol and Astra use OpenAI’s Standard, Batch, Fast, and Ultrafast
+rates. Fast costs twice Standard, Batch costs half, and Ultrafast follows
+the same March 1 price change as Bedrock Astra. Ultrafast estimates require
+a recorded timestamp with a UTC offset. Direct cache-write estimates use
+30-minute retention when the log omits the TTL.
+
+The [OpenAI price list](https://developers.openai.com/api/docs/pricing) and
+model cards also supply rates for GPT-5.4 Mini/Nano, GPT-5.6 Cyber,
+GPT-6 Cyber/Rosalind, and the listed GPT-6, 6.1, and 6.2 law and healthcare
+variants. Requests with unverified tiers, context sizes, or nonzero
+cache writes without published pricing remain unpriced.
 
 ### Recorded pricing context
 
@@ -202,20 +227,22 @@ the display model. Bedrock provider/inference prefixes can identify the route.
 Conflicting recorded routes or inconsistent input totals remain unpriced.
 
 When a known Bedrock request lacks a route, lcost assumes regional/US pricing;
-GPT-5.4/5.5 specifically assume regional pricing. An absent service tier
+GPT-5.4/5.5 and GPT-5.6 Cyber assume regional pricing. An absent service tier
 defaults to Standard. Without provider evidence, supported base rates are
 used where configured. Assumptions are retained and shown in query details.
 lcost does not use today's provider configuration to reconstruct historical
 routes, and it does not verify account permissions or enable model access.
 
-Estimates retain the rate-card date, AWS source, route, service tier, context
+Estimates retain the rate-card date, pricing source, route, service tier, context
 tier, and assumptions. Rate lookup is local and needs no AWS credentials.
 The primary sources are the AWS model cards for
 [GPT-6 Luna](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html),
 [GPT-6 Sol](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-sol.html),
 [GPT-6 Astra](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.html),
 [GPT-6.1 Terra](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-terra.html),
-and [GPT-6.1 Sol](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html).
+[GPT-6.1 Sol](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.html),
+[GPT-6.2 Sol](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-sol.html),
+and [GPT-6.2 Astra](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-2-astra.html).
 The [AWS model catalog](https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html)
 is the public source for current IDs and lifecycle status. Legacy or retired
 models may remain in local history even after they can no longer be invoked.

@@ -15,11 +15,12 @@ not authorize a token rate. Recalculation leaves their stored cost alone.
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Dict, List, Mapping, Optional, Tuple
 
-# Bump this when any configured token price changes. New entries retain this
-# reference so a future rate change is explainable without account billing.
+# Keep the original version for unchanged rates and references.
 RATE_CARD_VERSION = "2026-11-10"
+_NEW_GPT_RATE_CARD_VERSION = "2026-11-24"
 
 # USD per million tokens
 # Source: https://www.anthropic.com/pricing  (verify quarterly — update here if stale)
@@ -96,6 +97,43 @@ GPT61_SOL_PRICING = {
 GPT61_TERRA_PRICING = {
     'input': 1.00, 'output': 5.00, 'cache_write': 1.25, 'cache_read': 0.05,
 }
+GPT62_ASTRA_PRICING = {
+    'input': 8.00, 'output': 40.00, 'cache_write': 10.00, 'cache_read': 0.40,
+}
+_GPT62_KEYS = frozenset(("gpt-6.2-astra", "gpt-6.2-sol"))
+# Midnight Pacific on March 1, 2027.
+_GPT62_ULTRAFAST_LIST_START = datetime.fromisoformat("2027-03-01T08:00:00+00:00")
+_OPENAI_PRICING_URL = "https://developers.openai.com/api/docs/pricing"
+
+# A zero write rate marks an unpublished price.
+_OPENAI_ADDITIONAL_PRICING = {
+    "gpt-6.2-astra-law": GPT62_ASTRA_PRICING,
+    "gpt-6.2-astra-healthcare": GPT62_ASTRA_PRICING,
+    "gpt-6.2-sol-healthcare": GPT61_SOL_PRICING,
+    "gpt-6-astra-law": {**GPT6_ASTRA_PRICING, "cache_write": 0.0},
+    "gpt-6-astra-healthcare": {**GPT6_ASTRA_PRICING, "cache_write": 0.0},
+    "gpt-6.1-sol-healthcare": {**GPT61_SOL_PRICING, "cache_write": 0.0},
+    "gpt-6-cyber": {
+        "input": 20.00, "output": 100.00, "cache_write": 25.00, "cache_read": 2.00,
+    },
+    "gpt-6-rosalind": GPT6_ASTRA_PRICING,
+    "gpt-5.6-cyber": {
+        "input": 12.50, "output": 75.00, "cache_write": 15.625, "cache_read": 1.25,
+    },
+    "gpt-5.4-mini": {
+        "input": 0.75, "output": 4.50, "cache_write": 0.0, "cache_read": 0.075,
+    },
+    "gpt-5.4-nano": {
+        "input": 0.20, "output": 1.25, "cache_write": 0.0, "cache_read": 0.02,
+    },
+}
+_OPENAI_MODEL_CARDS = {
+    model: f"https://developers.openai.com/api/docs/models/{model}"
+    for model in ("gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.6-cyber")
+}
+_OPENAI_HEALTHCARE_KEYS = frozenset(
+    model for model in _OPENAI_ADDITIONAL_PRICING if model.endswith("-healthcare")
+)
 
 _AWS_CARD_ROOT = "https://docs.aws.amazon.com/bedrock/latest/userguide/"
 BEDROCK_MODEL_CARDS = {
@@ -104,11 +142,14 @@ BEDROCK_MODEL_CARDS = {
     "gpt-5.6-luna": _AWS_CARD_ROOT + "model-card-openai-gpt-56-luna.html",
     "gpt-5.6-terra": _AWS_CARD_ROOT + "model-card-openai-gpt-56-terra.html",
     "gpt-5.6-sol": _AWS_CARD_ROOT + "model-card-openai-gpt-56-sol.html",
+    "gpt-5.6-cyber": _AWS_CARD_ROOT + "model-card-openai-gpt-56-cyber.html",
     "gpt-6-luna": _AWS_CARD_ROOT + "model-card-openai-gpt-6-luna.html",
     "gpt-6-sol": _AWS_CARD_ROOT + "model-card-openai-gpt-6-sol.html",
     "gpt-6-astra": _AWS_CARD_ROOT + "model-card-openai-gpt-6-astra.html",
     "gpt-6.1-sol": _AWS_CARD_ROOT + "model-card-openai-gpt-6-1-sol.html",
     "gpt-6.1-terra": _AWS_CARD_ROOT + "model-card-openai-gpt-6-1-terra.html",
+    "gpt-6.2-sol": _AWS_CARD_ROOT + "model-card-openai-gpt-6-2-sol.html",
+    "gpt-6.2-astra": _AWS_CARD_ROOT + "model-card-openai-gpt-6-2-astra.html",
 }
 BEDROCK_MODEL_CARDS.update({
     model: _AWS_CARD_ROOT + "model-card-anthropic-" + model + ".html"
@@ -121,19 +162,25 @@ BEDROCK_MODEL_CARDS.update({
     )
 })
 LONG_CONTEXT_THRESHOLD = 272_000
-_GPT6_KEYS = frozenset((
+_GPT_CONTEXT_KEYS = _GPT62_KEYS | frozenset((
     "gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra",
-))
-_GPT_CONTEXT_KEYS = _GPT6_KEYS | frozenset((
     "gpt-5.4", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
 ))
+_EXACT_GPT_FAMILIES = _GPT_CONTEXT_KEYS | _OPENAI_ADDITIONAL_PRICING.keys()
 _MODEL_ALIASES = {
+    "gpt-6-2-sol": "gpt-6.2-sol",
+    "gpt-6-2-astra": "gpt-6.2-astra",
     "gpt-6-1-sol": "gpt-6.1-sol",
     "gpt-6-1-terra": "gpt-6.1-terra",
     "gpt-5-4": "gpt-5.4",
     "gpt-5-5": "gpt-5.5",
+    "gpt-5.4-mini-2026-03-17": "gpt-5.4-mini",
+    "gpt-5.4-nano-2026-03-17": "gpt-5.4-nano",
+    "gpt-5-6-cyber": "gpt-5.6-cyber",
     **{f"gpt-5-6-{name}": f"gpt-5.6-{name}" for name in ("sol", "terra", "luna")},
 }
+_REGIONAL_BEDROCK_KEYS = frozenset(("gpt-5.4", "gpt-5.5", "gpt-5.6-cyber"))
+_OPENAI_COMPACT_KEYS = frozenset(("gpt-5.4-mini", "gpt-5.4-nano"))
 
 
 def canonical_model_id(model: Optional[str]) -> str:
@@ -166,6 +213,10 @@ FAMILIES: List[ModelFamily] = [
     ModelFamily("opus",   ("opus",),               "#FF9900", OPUS_PRICING),
     ModelFamily("sonnet", ("sonnet",),             "#9999CC", SONNET_PRICING),
     ModelFamily("haiku",  ("haiku",),              "#CC6699", HAIKU_PRICING),
+    ModelFamily("gpt-6.2-astra", ("gpt-6.2-astra",), "#C87DCB", GPT62_ASTRA_PRICING),
+    ModelFamily("gpt-6.2-sol", ("gpt-6.2-sol",), "#37BDA9", GPT61_SOL_PRICING),
+    *(ModelFamily(model, (model,), "#50B080", rates)
+      for model, rates in _OPENAI_ADDITIONAL_PRICING.items()),
     ModelFamily("gpt-6.1-terra", ("gpt-6.1-terra", "gpt-6-1-terra"),
                 "#80C766", GPT61_TERRA_PRICING),
     ModelFamily("gpt-6.1-sol", ("gpt-6.1-sol", "gpt-6-1-sol"),
@@ -256,11 +307,10 @@ def family_for_model(model: Optional[str]) -> Optional[ModelFamily]:
     if not model:
         return None
     canonical = canonical_model_id(model)
-    if canonical in _GPT_CONTEXT_KEYS:
+    if canonical in _EXACT_GPT_FAMILIES:
         return FAMILIES_BY_KEY[canonical]
     for fam in FAMILIES:
-        # An unknown suffix/version must not inherit a verified GPT-6 price.
-        if fam.key in _GPT_CONTEXT_KEYS:
+        if fam.key in _EXACT_GPT_FAMILIES:
             continue
         if any(tok in canonical for tok in fam.tokens):
             return fam
@@ -301,6 +351,7 @@ class PriceQuote:
     tier: Optional[str] = None
     context: Optional[str] = None
     assumptions: Tuple[str, ...] = ()
+    verified_at: str = RATE_CARD_VERSION
 
 
 def quote_pricing(model: Optional[str], *, provider: Optional[str] = None,
@@ -311,6 +362,7 @@ def quote_pricing(model: Optional[str], *, provider: Optional[str] = None,
                   cache_writes_5m: Optional[int] = None,
                   cache_writes_1h: Optional[int] = None,
                   cache_write_split_recorded: bool = False,
+                  request_timestamp: Optional[str] = None,
                   assume_route: Optional[str] = None) -> Optional[PriceQuote]:
     """Select a verified price, retaining assumptions for an incomplete record."""
     rates = get_model_pricing(model)
@@ -330,8 +382,12 @@ def quote_pricing(model: Optional[str], *, provider: Optional[str] = None,
         expected_provider = "anthropic" if canonical.startswith("claude-") else "openai"
         if provider_name != expected_provider:
             return None
-    contextual = canonical in BEDROCK_MODEL_CARDS
-    if not contextual:
+    gpt62 = canonical in _GPT62_KEYS
+    additional = canonical in _OPENAI_ADDITIONAL_PRICING
+    new_gpt = gpt62 or additional
+    if additional and bedrock and canonical not in BEDROCK_MODEL_CARDS:
+        return None
+    if canonical not in BEDROCK_MODEL_CARDS and not additional:
         if (bedrock or inference_route is not None
                 or service_tier not in (None, "standard", "default")):
             return None
@@ -349,43 +405,72 @@ def quote_pricing(model: Optional[str], *, provider: Optional[str] = None,
         route = recorded_route
     if bedrock and route is None:
         route = assume_route or (
-            "regional" if canonical in ("gpt-5.4", "gpt-5.5") else "regional-or-us"
+            "regional" if canonical in _REGIONAL_BEDROCK_KEYS else "regional-or-us"
         )
         assumptions.append(f"Bedrock route not recorded; assumed {route}.")
     elif not bedrock:
-        if route is not None:
+        if route is not None and not (new_gpt and route == "direct"):
             return None
         route = "direct"
     if route not in ("direct", "global", "us", "regional", "regional-or-us"):
         return None
     if bedrock and route == "direct":
         return None
-    # These two AWS cards publish only commercial regional prices.
+    # These AWS cards publish only commercial regional prices.
     # Do not infer direct, geographic or global prices from another route.
-    if canonical in ("gpt-5.4", "gpt-5.5") and route != "regional":
+    if canonical in _REGIONAL_BEDROCK_KEYS and route != "regional" and (
+        bedrock or not additional
+    ):
         return None
 
     tier = (service_tier or "standard").lower()
     if tier == "default":
         tier = "standard"
-    if tier not in ("standard", "ultrafast"):
-        return None
-    if tier == "ultrafast" and canonical not in ("gpt-6-astra", "gpt-6.1-sol"):
+    if tier == "priority" and not bedrock and (gpt62 or canonical in _OPENAI_HEALTHCARE_KEYS):
+        tier = "fast"
+    tier_multiplier = 1.0
+    rate_suffix = ""
+    if tier == "ultrafast":
+        if gpt62 and (not bedrock or canonical == "gpt-6.2-astra"):
+            if not isinstance(request_timestamp, str):
+                return None
+            try:
+                request_time = datetime.fromisoformat(request_timestamp.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+            if request_time.tzinfo is None:
+                return None
+            tier_multiplier = 3 if request_time < _GPT62_ULTRAFAST_LIST_START else 6
+            rate_suffix = f":{tier_multiplier}x"
+        elif canonical in ("gpt-6-astra", "gpt-6.1-sol"):
+            tier_multiplier = 6
+        else:
+            return None
+    elif tier == "fast" and not bedrock and (gpt62 or canonical in _OPENAI_HEALTHCARE_KEYS):
+        tier_multiplier = 2
+    elif tier == "batch" and not bedrock and gpt62:
+        tier_multiplier = 0.5
+    elif tier != "standard":
         return None
     if service_tier is None:
         assumptions.append("Service tier not recorded; assumed Standard.")
-    if canonical in _GPT_CONTEXT_KEYS or canonical == "claude-haiku-5-5":
+    uses_context_pricing = (
+        canonical in _GPT_CONTEXT_KEYS or canonical == "claude-haiku-5-5"
+        or (canonical == "gpt-5.6-cyber" and not bedrock)
+    )
+    short_only = additional and not uses_context_pricing and canonical not in _OPENAI_COMPACT_KEYS
+    if uses_context_pricing or short_only:
         if not isinstance(input_tokens, int) or isinstance(input_tokens, bool) or input_tokens < 0:
             return None
-    if canonical in ("gpt-5.4", "gpt-5.5") and cache_writes != 0:
+    if short_only and input_tokens > LONG_CONTEXT_THRESHOLD:
         return None
+    if (rates["cache_write"] == 0 or (additional and tier == "fast")) and cache_writes != 0:
+        return None
+    if not bedrock and new_gpt and cache_writes:
+        assumptions.append("Cache-write TTL not recorded; assumed 30 minutes.")
     threshold = 100_000 if canonical == "claude-haiku-5-5" else LONG_CONTEXT_THRESHOLD
-    context = "long" if (
-        canonical in _GPT_CONTEXT_KEYS or canonical == "claude-haiku-5-5"
-    ) and input_tokens > threshold else "short"
-    multiplier = 1.1 if route in ("us", "regional", "regional-or-us") else 1.0
-    if tier == "ultrafast":
-        multiplier *= 6
+    context = "long" if uses_context_pricing and input_tokens > threshold else "short"
+    multiplier = tier_multiplier * (1.1 if route in ("us", "regional", "regional-or-us") else 1.0)
     selected = {}
     for bucket, price in rates.items():
         context_multiplier = 1.0
@@ -408,12 +493,15 @@ def quote_pricing(model: Optional[str], *, provider: Optional[str] = None,
                 ) / cache_writes
         elif cache_writes:
             assumptions.append("Cache-write TTL not recorded; assumed 5 minutes.")
-    reference = f"rate-card:{RATE_CARD_VERSION}:{canonical}:{route}:{tier}:{context}"
+    verified_at = _NEW_GPT_RATE_CARD_VERSION if new_gpt else RATE_CARD_VERSION
+    reference = f"rate-card:{verified_at}:{canonical}:{route}:{tier}:{context}{rate_suffix}"
     if canonical.startswith("claude-") and cache_writes:
         split = cache_write_split_recorded or cache_writes_5m is not None or cache_writes_1h is not None
         reference += ":cache-5m-1h" if split else ":cache-5m"
-    return PriceQuote(selected, reference, BEDROCK_MODEL_CARDS[canonical],
-                      route, tier, context, tuple(assumptions))
+    source = (_OPENAI_MODEL_CARDS.get(canonical, _OPENAI_PRICING_URL) if not bedrock and new_gpt
+              else BEDROCK_MODEL_CARDS[canonical])
+    return PriceQuote(selected, reference, source, route, tier, context, tuple(assumptions),
+                      verified_at)
 
 
 def pricing_context_for_entry(entry: Mapping) -> Dict:
@@ -429,6 +517,7 @@ def pricing_context_for_entry(entry: Mapping) -> Dict:
         "provider": entry.get("modelProvider"),
         "inference_route": entry.get("inferenceRoute"),
         "service_tier": entry.get("serviceTier"),
+        "request_timestamp": entry.get("ts"),
         "input_tokens": input_tokens,
         "cache_writes": entry.get("cacheWrites"),
         "cache_writes_5m": entry.get("cacheWrites5m"),
@@ -459,7 +548,7 @@ def quote_metadata(quote: PriceQuote) -> Dict:
     metadata = {"pricingRef": quote.reference}
     if quote.source is not None:
         metadata.update({
-            "pricingSource": quote.source, "pricingVerifiedAt": RATE_CARD_VERSION,
+            "pricingSource": quote.source, "pricingVerifiedAt": quote.verified_at,
             "pricingRoute": quote.route, "pricingTier": quote.tier,
             "pricingContext": quote.context,
             "pricingAssumptions": list(quote.assumptions),

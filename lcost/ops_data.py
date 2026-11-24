@@ -5,6 +5,7 @@ Python types. No Textual, no I/O, no UI state. Keeping them here makes them
 trivially testable and reusable across tabs.
 """
 
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -21,7 +22,7 @@ from .formatters import (
     format_number,
     total_tokens,
 )
-from .pricing import FAMILIES, family_for_model
+from .pricing import FAMILIES, canonical_model_id, family_for_model
 
 # Single source of truth: model family → color. Built from the pricing
 # registry so new families are picked up automatically.
@@ -338,6 +339,14 @@ def short_model(model: Optional[str]) -> str:
     fam = family_for_model(model)
     if fam is None:
         return model.split("-", 1)[0] if "-" in model else model
+    if fam.key.startswith("gpt"):
+        canonical = canonical_model_id(model)
+        if canonical == fam.key or (
+            fam.key == "gpt" and canonical.startswith("gpt-")
+        ) or (
+            fam.key == "gpt-5" and re.match(r"^gpt-5[.-]\d+-", canonical)
+        ):
+            return canonical
 
     ctx = _extract_context_tag(model)
 
