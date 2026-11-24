@@ -11,7 +11,7 @@ to switch the board between price and tokens; the selected query shows both.
 
 ## Install and try the demo
 
-Requires Python 3.9 or later on macOS or Linux. Dashboard dependencies install
+Requires Python 3.13 or later on macOS or Linux. Dashboard dependencies install
 with the package. A [Nerd Font](https://www.nerdfonts.com/) provides the full
 set of terminal glyphs.
 
@@ -19,7 +19,7 @@ Clone this repository from your Git host, then run:
 
 ```bash
 cd lcost
-python3 -m venv .venv
+python3.13 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 lcost --demo
@@ -158,6 +158,6 @@ python -m pytest -q
 
 Tests use synthetic sessions and temporary ledgers. The
 [GitHub workflow](.github/workflows/guard.yml) and
-[GitLab pipeline](.gitlab-ci.yml) define the Python checks; GitHub also tests
-macOS. The [module guide](docs/reference.md#module-responsibilities)
+[GitLab pipeline](.gitlab-ci.yml) run the suite on Python 3.13. GitHub tests
+Linux and macOS. The [module guide](docs/reference.md#module-responsibilities)
 identifies where collection, storage, calculations, and presentation belong.
